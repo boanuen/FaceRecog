@@ -1,0 +1,7 @@
+# Dataset THÍ NGHIỆM: train bỏ ảnh quan/tri mặt <10%. val/test giữ nguyên.
+train: C:\Users\Admin\detect\ultralytics\train_filtered.txt
+val: C:\Users\Admin\detect\ultralytics\valid\images
+test: C:\Users\Admin\detect\ultralytics\test\images
+
+nc: 5
+names: ['nghia', 'quan', 'son', 'tri', 'tui']

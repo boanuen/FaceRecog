@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 5
+names: ['nghia', 'quan', 'son', 'tri', 'tui']
+
+roboflow:
+  workspace: baodz20811-gmail-com
+  project: hi-zpnvh
+  version: 22
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/baodz20811-gmail-com/hi-zpnvh/dataset/22

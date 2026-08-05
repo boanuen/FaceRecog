@@ -1,0 +1,11 @@
+﻿venv/
+__pycache__/
+*.py[cod]
+.env
+.idea/
+*.pt
+*.xlsx
+nhat_ky_*.xlsx
+.cache/
+runs/
+wandb/
