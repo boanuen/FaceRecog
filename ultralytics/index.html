@@ -472,37 +472,67 @@
             }, 'image/jpeg', 0.92);
         }
 
+        let processingFrame = false;
+        let frameBuffer = null;
+        let frameSkipCounter = 0;
+        const SKIP_FRAMES = 2;  // detect mỗi 2 frame (1 detect, 1 skip)
+
         async function sendFramesLoop() {
             if (!isStreaming) return;
             canvas.width  = videoElement.videoWidth  || 640;
             canvas.height = videoElement.videoHeight || 480;
-            canvas.getContext('2d').drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+            let ctx = canvas.getContext('2d');
+            ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
 
-            canvas.toBlob(async function(blob) {
-                if (!blob || !isStreaming) return;
-                let fd = new FormData();
-                fd.append('file', blob, 'frame.jpg');
-                fd.append('conf_known', ckSlider.value);    // ngưỡng người quen (chỉnh bằng slider)
-                fd.append('conf_detect', cdSlider.value);   // ngưỡng bắt mặt
-                try {
-                    let res = await fetch('/process-frame', { method: 'POST', body: fd });
-                    let data = await res.json();
-                    if (data.image) streamImage.src = data.image;   // video: realtime, mượt
+            // 🔴 REALTIME: Hiển thị frame gốc ngay lập tức (không chờ detect)
+            canvas.toBlob(function(blob) {
+                if (blob) {
+                    frameBuffer = blob;
+                    streamImage.src = URL.createObjectURL(blob);
+                }
+            }, 'image/jpeg', 0.75);  // quality thấp hơn cho nhanh
 
-                    // FPS tính mỗi frame
-                    let now = performance.now();
-                    frameTimes.push(now);
-                    while (frameTimes.length && now - frameTimes[0] > 1000) frameTimes.shift();
+            // FPS tính realtime
+            let now = performance.now();
+            frameTimes.push(now);
+            while (frameTimes.length && now - frameTimes[0] > 1000) frameTimes.shift();
 
-                    // Panel (kết quả + thống kê) cập nhật TỪ TỪ mỗi RENDER_MS cho đỡ nhảy
-                    if (now - lastRender >= RENDER_MS) {
-                        renderResults(data);
-                        stFps.innerText = frameTimes.length;
-                        lastRender = now;
-                    }
-                } catch (e) { console.error("Lỗi gửi frame:", e); }
-                if (isStreaming) requestAnimationFrame(sendFramesLoop);
-            }, 'image/jpeg', 0.8);
+            // 🟢 BACKGROUND: Frame Skipping - detect 1 lần mỗi SKIP_FRAMES
+            frameSkipCounter++;
+            if (!processingFrame && frameBuffer && frameSkipCounter % SKIP_FRAMES === 0) {
+                processingFrame = true;
+                sendDetectionAsync(frameBuffer);
+            }
+
+            // Loop ngay, không chờ response
+            if (isStreaming) requestAnimationFrame(sendFramesLoop);
+        }
+
+        async function sendDetectionAsync(blob) {
+            if (!blob || !isStreaming) return;
+            let fd = new FormData();
+            fd.append('file', blob, 'frame.jpg');
+            fd.append('conf_known', ckSlider.value);
+            fd.append('conf_detect', cdSlider.value);
+            try {
+                let res = await fetch('/process-frame', { method: 'POST', body: fd });
+                let data = await res.json();
+
+                // Cập nhật ảnh annotate (chỉ khi detect xong)
+                if (data.image) streamImage.src = data.image;
+
+                // Cập nhật panel từ từ (mỗi RENDER_MS)
+                let now = performance.now();
+                if (now - lastRender >= RENDER_MS) {
+                    renderResults(data);
+                    stFps.innerText = frameTimes.length;
+                    lastRender = now;
+                }
+            } catch (e) {
+                console.error("Lỗi gửi detect:", e);
+            } finally {
+                processingFrame = false;
+            }
         }
     </script>
 </body>
