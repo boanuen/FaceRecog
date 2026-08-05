@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nhận Diện Khuôn Mặt</title>
+    <style>
+        :root{
+            --bg0:#0b1120; --card:rgba(30,41,59,.55); --border:rgba(148,163,184,.14);
+            --border2:rgba(148,163,184,.24); --text:#e2e8f0; --muted:#94a3b8; --faint:#64748b;
+            --accent:#38bdf8; --shadow:0 12px 34px -14px rgba(0,0,0,.65);
+        }
+        * { box-sizing: border-box; }
+        body {
+            font-family:'Segoe UI', system-ui, -apple-system, Roboto, sans-serif;
+            color: var(--text); margin: 0; padding: 26px 20px 44px; min-height: 100vh;
+            background:
+                radial-gradient(1200px 600px at 12% -10%, rgba(99,102,241,.20), transparent 60%),
+                radial-gradient(1000px 520px at 100% 0%, rgba(56,189,248,.15), transparent 55%),
+                var(--bg0);
+        }
+        h1 {
+            margin: 0 0 6px; text-align: center; font-size: 30px; font-weight: 800; letter-spacing: .3px;
+            background: linear-gradient(90deg,#38bdf8,#818cf8 55%,#c084fc);
+            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .subtitle { color: var(--muted); text-align: center; margin-bottom: 16px; font-size: 14px; }
+        .subtitle b { color: #cbd5e1; }
+        .status {
+            display: flex; align-items: center; gap: 8px; width: fit-content; margin: 0 auto 22px;
+            padding: 7px 16px; background: rgba(22,101,52,.35); color: #4ade80;
+            border: 1px solid rgba(74,222,128,.25); border-radius: 999px; font-size: 13px; font-weight: 600;
+        }
+        .status::before {
+            content:''; width: 8px; height: 8px; border-radius: 50%; background: currentColor;
+            animation: pulse 1.8s infinite;
+        }
+        @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(74,222,128,.5)} 70%{box-shadow:0 0 0 7px rgba(74,222,128,0)} 100%{box-shadow:0 0 0 0 rgba(74,222,128,0)} }
+
+        .layout { display: flex; gap: 20px; max-width: 1200px; margin: 0 auto; align-items: flex-start; flex-wrap: wrap; }
+        .left  { flex: 1 1 640px; min-width: 320px; }
+        .right { flex: 1 1 350px; min-width: 300px; display: flex; flex-direction: column; gap: 16px; }
+
+        .display-box {
+            width: 100%; aspect-ratio: 4/3; border-radius: 18px; overflow: hidden;
+            background: linear-gradient(135deg,#1e293b,#0f172a); border: 1px solid var(--border2);
+            display: flex; align-items: center; justify-content: center; box-shadow: var(--shadow);
+        }
+        .display-box img { width: 100%; height: 100%; object-fit: contain; }
+
+        .card {
+            background: var(--card); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+            border: 1px solid var(--border); border-radius: 16px; padding: 18px; box-shadow: var(--shadow);
+            transition: transform .18s ease, border-color .18s ease;
+        }
+        .card:hover { transform: translateY(-2px); border-color: var(--border2); }
+        .card h3 { margin: 0 0 14px; font-size: 15px; font-weight: 700; color: #cbd5e1; display: flex; align-items: center; gap: 8px; }
+
+        /* Banner kết quả tổng */
+        .recog { padding: 14px 16px; border-radius: 12px; font-size: 17px; font-weight: 800; background: rgba(51,65,85,.6); color: var(--muted); text-align: center; margin-bottom: 14px; transition: all .2s; border: 1px solid var(--border); }
+        .recog.ok    { background: linear-gradient(135deg,rgba(22,101,52,.55),rgba(16,185,129,.35)); color: #bbf7d0; border-color: rgba(74,222,128,.35); }
+        .recog.alert { background: linear-gradient(135deg,#7f1d1d,#b91c1c); color: #fecaca; border-color: rgba(248,113,113,.4); animation: blink 1s steps(2, start) infinite; }
+        @keyframes blink { 50% { filter: brightness(1.35); } }
+
+        /* Danh sách từng mặt */
+        .det { margin: 10px 0; }
+        .det-row { display: flex; align-items: center; justify-content: space-between; font-size: 14px; margin-bottom: 5px; }
+        .det-name { font-weight: 700; }
+        .bar { height: 9px; background: rgba(2,6,23,.7); border-radius: 999px; overflow: hidden; }
+        .bar > span { display: block; height: 100%; border-radius: 999px; transition: width .25s ease; }
+        .empty { color: var(--faint); font-size: 14px; text-align: center; padding: 10px 6px; }
+
+        /* Thống kê */
+        .stats { display: flex; gap: 12px; }
+        .stat { flex: 1; background: rgba(2,6,23,.5); border: 1px solid var(--border); border-radius: 12px; padding: 12px 8px; text-align: center; }
+        .stat .v { font-size: 22px; font-weight: 800; background: linear-gradient(90deg,#38bdf8,#818cf8); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+        .stat .l { font-size: 11px; color: var(--muted); margin-top: 3px; text-transform: uppercase; letter-spacing: .5px; }
+
+        /* Nhật ký */
+        .log { max-height: 170px; overflow-y: auto; font-size: 13px; }
+        .log-item { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+        .log-item:last-child { border-bottom: none; }
+        .log-item .t { color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .log::-webkit-scrollbar { width: 6px; }
+        .log::-webkit-scrollbar-thumb { background: rgba(148,163,184,.3); border-radius: 3px; }
+
+        /* Nguyên lý */
+        .step { display: flex; gap: 12px; margin-bottom: 12px; align-items: flex-start; }
+        .step:last-child { margin-bottom: 0; }
+        .step .n { flex: none; width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg,#0ea5e9,#6366f1); color: #fff; font-weight: 700; font-size: 13px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px -3px rgba(14,165,233,.6); }
+        .step .tx { font-size: 13px; color: #cbd5e1; line-height: 1.5; }
+        .step .tx b { color: #e2e8f0; }
+        .pill-g { color: #4ade80; } .pill-r { color: #f87171; }
+
+        /* Controls */
+        .controls { margin-top: 16px; }
+        .select-cam { width: 100%; padding: 11px; background: rgba(2,6,23,.5); color: #fff; border: 1px solid var(--border2); border-radius: 10px; margin-bottom: 12px; font-size: 14px; }
+        .btn-row { display: flex; gap: 10px; }
+        .btn { flex: 1; padding: 12px; border: none; border-radius: 10px; font-weight: 700; cursor: pointer; color: #fff; font-size: 14px; transition: filter .15s, transform .1s; box-shadow: 0 6px 16px -8px rgba(0,0,0,.7); }
+        .btn:hover { filter: brightness(1.1); } .btn:active { transform: translateY(1px); }
+        .btn-green { background: linear-gradient(135deg,#22c55e,#16a34a); }
+        .btn-red { background: linear-gradient(135deg,#ef4444,#dc2626); }
+        .btn-link { display: block; margin-top: 12px; padding: 12px; text-align: center; text-decoration: none; background: linear-gradient(135deg,#0ea5e9,#0284c7); color: #fff; border-radius: 10px; font-weight: 700; font-size: 14px; transition: filter .15s; }
+        .btn-link:hover { filter: brightness(1.1); }
+
+        /* Slider ngưỡng */
+        .slider { margin-bottom: 16px; }
+        .slider:last-child { margin-bottom: 0; }
+        .slider-top { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 8px; }
+        .slider-top b { color: var(--accent); font-variant-numeric: tabular-nums; font-size: 15px; }
+        .slider input[type=range] { width: 100%; accent-color: var(--accent); height: 6px; }
+        .hint { font-size: 11px; color: var(--faint); margin-top: 6px; }
+    </style>
+</head>
+<body>
+
+    <h1>Nhận Diện Khuôn Mặt</h1>
+    <div class="subtitle">Engine: <b>YOLO26</b></div>
+    <div id="status-tag" class="status">Đang kết nối Camera...</div>
+
+    <div class="layout">
+        <!-- CỘT TRÁI: video + điều khiển -->
+        <div class="left">
+            <div class="display-box">
+                <img id="video-stream" src="" alt="Webcam Stream" style="display:none;">
+                <video id="webcam-hidden" autoplay playsinline style="display:none;"></video>
+                <p id="placeholder-text" style="color:#64748b;">Đang kết nối Camera...</p>
+            </div>
+            <div class="controls">
+                <label style="font-size:13px;color:#94a3b8;">Nguồn Camera:</label>
+                <select id="cam-select" class="select-cam" onchange="switchCamera()"></select>
+                <div class="btn-row">
+                    <button class="btn btn-green" onclick="startCamera()">Bật Cam</button>
+                    <button class="btn btn-red" onclick="stopCamera()">Tắt Cam</button>
+                </div>
+                <a class="btn-link" href="/results" target="_blank">Xem kết quả train</a>
+            </div>
+        </div>
+
+        <!-- CỘT PHẢI: kết quả + thống kê + nhật ký + nguyên lý -->
+        <div class="right">
+            <div class="card">
+                <h3>Thống kê</h3>
+                <div class="stats">
+                    <div class="stat"><div class="v" id="st-fps">0</div><div class="l">FPS</div></div>
+                    <div class="stat"><div class="v" id="st-face">0</div><div class="l">Khuôn mặt</div></div>
+                    <div class="stat"><div class="v" id="st-ms">0</div><div class="l">ms / frame</div></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>Kết quả nhận diện</h3>
+                <div id="recog" class="recog">Chưa nhận diện</div>
+                <div id="det-list"><div class="empty">Chưa có khuôn mặt nào</div></div>
+            </div>
+
+            <div class="card">
+                <h3>Ngưỡng nhận diện</h3>
+                <div class="slider">
+                    <div class="slider-top"><span>Người quen ≥</span><b id="ck-val">0.35</b></div>
+                    <input type="range" id="ck" min="0.20" max="0.95" step="0.01" value="0.35">
+                    <div class="hint">Cao → chắc chắn mới nhận tên (ít nhầm, dễ báo "lạ").</div>
+                </div>
+                <div class="slider">
+                    <div class="slider-top"><span>Bắt mặt ≥</span><b id="cd-val">0.25</b></div>
+                    <input type="range" id="cd" min="0.05" max="0.60" step="0.01" value="0.25">
+                    <div class="hint">Thấp → bắt cả mặt mờ/xa (nhiều khung hơn).</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>Thêm / Quản lý người</h3>
+                <div style="font-size:12px;color:#94a3b8;margin-bottom:8px;">Go ten (co the la <b>nguoi moi</b>) roi bam nut chup — dua mat vao camera. Khong can train.</div>
+                <input id="cap-person" list="people-list" class="select-cam" placeholder="Tên người (vd: tui, hoặc tên mới)" autocomplete="off"
+                       style="width:100%;padding:8px;box-sizing:border-box;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;">
+                <datalist id="people-list"></datalist>
+                <select id="cap-role" style="width:100%;padding:8px;margin-top:8px;box-sizing:border-box;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;font-size:14px;">
+                    <option value="kĩ sư">ki su</option>
+                    <option value="sinh viên">sinh vien</option>
+                </select>
+                <button class="btn" style="background:#8b5cf6;width:100%;margin-top:8px;" onclick="captureSample()">Chup mau (them vao DB)</button>
+                <div id="cap-status" style="font-size:13px;color:#94a3b8;margin-top:8px;text-align:center;">Chưa chụp mẫu nào</div>
+                <div style="font-size:12px;color:#94a3b8;margin:12px 0 6px;border-top:1px solid #334155;padding-top:10px;">Người trong hệ thống:</div>
+                <div id="people-box" style="font-size:13px;color:#cbd5e1;">Đang tải...</div>
+            </div>
+
+            <div class="card">
+                <h3>Nhật ký <span style="font-size:11px;color:#94a3b8;font-weight:normal;"></span></h3>
+                <div id="log" class="log"><div class="empty">Chưa có sự kiện</div></div>
+                <a id="export-btn" href="/export" target="_blank" class="btn-link" style="margin-top:10px;background:linear-gradient(135deg,#16a34a,#15803d);font-size:13px;padding:9px;">
+                    Xuat Excel (Ngay / Tuan / Thang)
+                </a>
+            </div>
+
+            <div class="card">
+                <h3>Nguyên lý hoạt động</h3>
+                <div class="step"><div class="n">1</div><div class="tx"><b>Camera</b> gửi từng khung hình lên server (FastAPI).</div></div>
+                <div class="step"><div class="n">2</div><div class="tx"><b>YOLO26</b> tìm & khoanh khuôn mặt; <b>ArcFace</b> biến mặt thành vector rồi so (cosine) với người đã đăng ký.</div></div>
+                <div class="step"><div class="n">3</div><div class="tx">Xét độ giống cosine:<br>• ≥ ngưỡng (mặc định 0.35) → <b class="pill-g">Người quen</b>, hiện tên.<br>• thấp hơn → <b class="pill-r">Người lạ</b>. Người khác thường chỉ ~0.1 nên tên đúng cách xa hẳn.</div></div>
+                <div class="step"><div class="n">4</div><div class="tx">Vẽ khung + trả ảnh về, cập nhật kết quả <b>realtime</b>.</div></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let videoElement = document.getElementById('webcam-hidden');
+        let streamImage  = document.getElementById('video-stream');
+        let placeholder  = document.getElementById('placeholder-text');
+        let statusTag    = document.getElementById('status-tag');
+        let recogBox     = document.getElementById('recog');
+        let detList      = document.getElementById('det-list');
+        let logBox       = document.getElementById('log');
+        let camSelect    = document.getElementById('cam-select');
+        let stFps  = document.getElementById('st-fps');
+        let stFace = document.getElementById('st-face');
+        let stMs   = document.getElementById('st-ms');
+        let ckSlider = document.getElementById('ck');
+        let cdSlider = document.getElementById('cd');
+        let ckVal = document.getElementById('ck-val');
+        let cdVal = document.getElementById('cd-val');
+        ckSlider.oninput = () => ckVal.innerText = parseFloat(ckSlider.value).toFixed(2);
+        cdSlider.oninput = () => cdVal.innerText = parseFloat(cdSlider.value).toFixed(2);
+
+        let mediaStream = null, isStreaming = false;
+        let canvas = document.createElement('canvas');
+        let frameTimes = [];        // để tính FPS
+        let lastKnownKey = null;    // tránh gửi event trùng liên tục (null = chưa khởi tạo)
+        let lastRender = 0;         // lần cập nhật panel gần nhất
+        const RENDER_MS = 1000;     // panel cập nhật mỗi 1s cho đỡ nhảy (video vẫn realtime)
+
+        window.onload = async function() {
+            loadPeople();          // tải danh sách người trong DB (thêm/xoá không cần train)
+            await getCameraList();
+            startCamera();
+        };
+
+        async function getCameraList() {
+            try {
+                const tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                tempStream.getTracks().forEach(t => t.stop());
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const cams = devices.filter(d => d.kind === 'videoinput');
+                camSelect.innerHTML = '';
+                cams.forEach((d, i) => {
+                    const o = document.createElement('option');
+                    o.value = d.deviceId; o.text = d.label || `Camera ${i + 1}`;
+                    camSelect.appendChild(o);
+                });
+                let idx = cams.findIndex(d => d.label.toLowerCase().includes('ugreen') || d.label.toLowerCase().includes('usb'));
+                if (idx !== -1) camSelect.selectedIndex = idx;
+                else if (cams.length > 1) camSelect.selectedIndex = cams.length - 1;
+            } catch (err) { console.error("Lỗi lấy thiết bị Cam:", err); }
+        }
+
+        async function startCamera() {
+            stopCameraTracks();
+            const deviceId = camSelect.value;
+            const constraints = { video: deviceId ? { deviceId: deviceId } : true };
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+                videoElement.srcObject = mediaStream;
+                isStreaming = true;
+                streamImage.style.display = 'block';
+                placeholder.style.display = 'none';
+                setStatus("Camera đang chạy...", "#166534", "#4ade80");
+                frameTimes = [];
+                sendFramesLoop();
+            } catch (err) {
+                setStatus("Lỗi cấp quyền Cam!", "#991b1b", "#f87171");
+                alert("Lỗi mở Cam: " + err.message + "\nHãy kiểm tra biểu tượng Camera trên thanh địa chỉ đã chọn Allow chưa!");
+            }
+        }
+
+        function switchCamera() { if (isStreaming) startCamera(); }
+
+        function stopCameraTracks() {
+            isStreaming = false;
+            if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
+        }
+
+        function stopCamera() {
+            stopCameraTracks();
+            streamImage.style.display = 'none';
+            placeholder.innerText = "Camera đã tắt";
+            placeholder.style.display = 'block';
+            setStatus("Camera đã tắt", "#991b1b", "#f87171");
+            recogBox.className = "recog"; recogBox.innerText = "Chưa nhận diện";
+            detList.innerHTML = '<div class="empty">Chưa có khuôn mặt nào</div>';
+            stFps.innerText = stFace.innerText = stMs.innerText = '0';
+        }
+
+        function setStatus(txt, bg, fg) {
+            statusTag.innerText = txt; statusTag.style.background = bg; statusTag.style.color = fg;
+        }
+
+        // Màu theo confidence: cao=xanh, vừa=vàng, thấp=đỏ
+        function confColor(c, stranger) {
+            if (stranger) return '#ef4444';
+            if (c >= 0.75) return '#22c55e';
+            if (c >= 0.6)  return '#84cc16';
+            return '#eab308';
+        }
+
+        function renderResults(data) {
+            let dets = data.detections || [];
+
+            // 1) Banner tổng
+            let known = data.known || [];
+            if (data.stranger) {
+                let extra = known.length ? " (kèm: " + known.join(", ") + ")" : "";
+                recogBox.className = "recog alert";
+                recogBox.innerText = "NGƯỜI LẠ!" + extra;
+            } else if (known.length) {
+                recogBox.className = "recog ok";
+                recogBox.innerText = "Đã nhận diện: " + known.join(", ");
+            } else {
+                recogBox.className = "recog";
+                recogBox.innerText = "Không phát hiện khuôn mặt";
+            }
+
+            // 2) Danh sách từng mặt + thanh confidence
+            if (dets.length) {
+                detList.innerHTML = dets.map(d => {
+                    let pct = Math.round(d.conf * 100);
+                    let col = confColor(d.conf, d.stranger);
+                    return `<div class="det">
+                        <div class="det-row"><span class="det-name" style="color:${col}">${d.name}</span><span>${pct}%</span></div>
+                        <div class="bar"><span style="width:${pct}%;background:${col}"></span></div>
+                    </div>`;
+                }).join('');
+            } else {
+                detList.innerHTML = '<div class="empty">Chưa có khuôn mặt nào</div>';
+            }
+
+            // 3) Thống kê
+            stFace.innerText = data.count || 0;
+            stMs.innerText = data.infer_ms != null ? data.infer_ms : 0;
+
+            // 4) Nhật ký + gửi event backend — chỉ khi danh sách người quen THAY ĐỔI
+            let knownKey = known.slice().sort().join(",");
+            if (knownKey !== lastKnownKey) {
+                lastKnownKey = knownKey;
+                // Gửi danh sách hiện tại lên backend (backend tự tính vào/ra)
+                postLogEvent(known);
+                // Hiển thị trong UI log
+                if (known.length > 0 || data.stranger) {
+                    let now = new Date().toLocaleTimeString('vi-VN');
+                    let knownTxt = dets.filter(d => !d.stranger)
+                                       .map(d => `${d.name} ${Math.round(d.conf * 100)}%`)
+                                       .join(", ");
+                    let txt = data.stranger ? ("Người lạ" + (knownTxt ? " + " + knownTxt : ""))
+                                            : knownTxt;
+                    addLog(now, txt, data.stranger);
+                }
+            }
+        }
+
+        function addLog(time, txt, isAlert) {
+            if (logBox.querySelector('.empty')) logBox.innerHTML = '';
+            let el = document.createElement('div');
+            el.className = 'log-item';
+            el.innerHTML = `<span style="color:${isAlert ? '#f87171' : '#4ade80'}">${txt}</span><span class="t">${time}</span>`;
+            logBox.prepend(el);
+        }
+
+        async function postLogEvent(knownNames) {
+            try {
+                let fd = new FormData();
+                fd.append('current_names', knownNames.join(','));
+                await fetch('/log-event', { method: 'POST', body: fd });
+            } catch(e) { /* silent */ }
+        }
+
+        async function setDetector(mode) {
+            try {
+                let fd = new FormData();
+                fd.append('mode', mode);
+                let res = await fetch('/set-detector', { method: 'POST', body: fd });
+                let d = await res.json();
+                if (d.ok) {
+                    setStatus(`Detector: ${mode === 'scrfd' ? 'SCRFD (mọi người)' : 'YOLO (nhanh)'}`, "#0f172a", "#38bdf8");
+                    setTimeout(() => setStatus("Camera đang chạy...", "#166534", "#4ade80"), 2000);
+                }
+            } catch(e) { /* silent */ }
+        }
+
+        // ── Quản lý người: tải danh sách, hiện chip + nút xoá, đổ vào datalist ──
+        function renderPeople(people) {
+            let box = document.getElementById('people-box');
+            let dl  = document.getElementById('people-list');
+            if (!people || !people.length) {
+                box.innerHTML = '<span style="color:#94a3b8">Chưa có ai trong DB</span>';
+                dl.innerHTML = '';
+                return;
+            }
+            box.innerHTML = people.map(p => `
+                <div style="display:flex;align-items:center;gap:6px;padding:5px 8px;margin:4px 0;background:#0f172a;border:1px solid #334155;border-radius:6px;">
+                    <span style="flex:1;min-width:0;">
+                        <b>${p.name}</b>
+                        <span style="color:#94a3b8;font-size:12px;"> · ${p.count} mẫu</span>
+                    </span>
+                    <select onchange="updateRole('${p.name}', this.value)" title="Đổi role"
+                        style="background:#1e293b;color:#e2e8f0;border:1px solid #475569;border-radius:5px;padding:3px 6px;font-size:12px;cursor:pointer;">
+                        <option value="kỹ sư"    ${p.role === 'kỹ sư'    ? 'selected' : ''}>Ky su</option>
+                        <option value="sinh viên" ${p.role === 'sinh viên' ? 'selected' : ''}>Sinh vien</option>
+                    </select>
+                    <button onclick="removePerson('${p.name}')" title="Xoa nguoi nay"
+                        style="background:#7f1d1d;color:#fecaca;border:none;border-radius:5px;padding:3px 9px;cursor:pointer;font-size:13px;flex-shrink:0;">X</button>
+                </div>`).join('');
+            dl.innerHTML = people.map(p => `<option value="${p.name}">`).join('');
+        }
+
+        async function loadPeople() {
+            try {
+                let d = await (await fetch('/people')).json();
+                renderPeople(d.people);
+            } catch (e) { /* server chưa sẵn sàng */ }
+        }
+
+        async function updateRole(name, role) {
+            let fd = new FormData();
+            fd.append('person', name);
+            fd.append('role', role);
+            try {
+                let d = await (await fetch('/update-role', { method: 'POST', body: fd })).json();
+                if (d.ok) renderPeople(d.people);
+            } catch(e) {}
+        }
+
+        async function removePerson(name) {
+            if (!confirm(`Xoá "${name}" khỏi hệ thống? (không thể hoàn tác trừ khi enroll lại)`)) return;
+            let fd = new FormData(); fd.append('person', name);
+            try {
+                let d = await (await fetch('/remove-person', { method: 'POST', body: fd })).json();
+                renderPeople(d.people);
+                let statusEl = document.getElementById('cap-status');
+                statusEl.style.color = '#fca5a5';
+                statusEl.innerText = d.ok ? `Đã xoá "${name}"` : `Không tìm thấy "${name}"`;
+            } catch (e) {}
+        }
+
+        async function captureSample() {
+            if (!isStreaming) { alert("Bật camera trước đã."); return; }
+            let person = document.getElementById('cap-person').value;
+            let statusEl = document.getElementById('cap-status');
+            statusEl.style.color = '#94a3b8';
+            statusEl.innerText = 'Đang lưu...';
+            canvas.width  = videoElement.videoWidth  || 640;
+            canvas.height = videoElement.videoHeight || 480;
+            canvas.getContext('2d').drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+            canvas.toBlob(async function(blob) {
+                let fd = new FormData();
+                fd.append('file', blob, 'cap.jpg');
+                fd.append('person', person);
+                fd.append('role', document.getElementById('cap-role').value);
+                try {
+                    let res = await fetch('/capture', { method: 'POST', body: fd });
+                    let d = await res.json();
+                    if (d.ok) {
+                        statusEl.style.color = '#4ade80';
+                        statusEl.innerText = (d.is_new ? `Đã tạo người mới "${person}"! ` : '')
+                                           + `${person}: ${d.count} mẫu (tổng ${d.total})`;
+                        renderPeople(d.people);   // cập nhật danh sách ngay
+                    } else {
+                        statusEl.style.color = '#f87171';
+                        statusEl.innerText = (d.msg || 'Lỗi');
+                    }
+                } catch (e) {
+                    statusEl.style.color = '#f87171';
+                    statusEl.innerText = 'Lỗi gửi ảnh';
+                }
+            }, 'image/jpeg', 0.92);
+        }
+
+        async function sendFramesLoop() {
+            if (!isStreaming) return;
+            canvas.width  = videoElement.videoWidth  || 640;
+            canvas.height = videoElement.videoHeight || 480;
+            canvas.getContext('2d').drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+
+            canvas.toBlob(async function(blob) {
+                if (!blob || !isStreaming) return;
+                let fd = new FormData();
+                fd.append('file', blob, 'frame.jpg');
+                fd.append('conf_known', ckSlider.value);    // ngưỡng người quen (chỉnh bằng slider)
+                fd.append('conf_detect', cdSlider.value);   // ngưỡng bắt mặt
+                try {
+                    let res = await fetch('/process-frame', { method: 'POST', body: fd });
+                    let data = await res.json();
+                    if (data.image) streamImage.src = data.image;   // video: realtime, mượt
+
+                    // FPS tính mỗi frame
+                    let now = performance.now();
+                    frameTimes.push(now);
+                    while (frameTimes.length && now - frameTimes[0] > 1000) frameTimes.shift();
+
+                    // Panel (kết quả + thống kê) cập nhật TỪ TỪ mỗi RENDER_MS cho đỡ nhảy
+                    if (now - lastRender >= RENDER_MS) {
+                        renderResults(data);
+                        stFps.innerText = frameTimes.length;
+                        lastRender = now;
+                    }
+                } catch (e) { console.error("Lỗi gửi frame:", e); }
+                if (isStreaming) requestAnimationFrame(sendFramesLoop);
+            }, 'image/jpeg', 0.8);
+        }
+    </script>
+</body>
+</html>
