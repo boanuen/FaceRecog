@@ -5,6 +5,7 @@ Chạy local:  uvicorn main:app --host 0.0.0.0 --port 8000
 from fastapi import FastAPI, File, UploadFile, Form, Query
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, StreamingResponse
 from collections import deque, Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 import cv2
 import numpy as np
 import base64
@@ -17,6 +18,8 @@ from datetime import datetime, timedelta
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from recognizer import FaceRecognizer, BASE_DIR, DB_PATH
+
+executor = ThreadPoolExecutor(max_workers=3)
 
 app = FastAPI(title="YOLO26 + ArcFace Face Recognition")
 
@@ -165,7 +168,7 @@ async def process_frame(
         cv2.putText(annotated, label, (x1 + 2, y1 - 6),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-    _, buf = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    _, buf = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
     b64    = base64.b64encode(buf).decode("utf-8")
     known_unique = list(dict.fromkeys(known))   # bỏ trùng, giữ thứ tự
     # sắp xếp: người lạ lên đầu, rồi theo cosine giảm dần
