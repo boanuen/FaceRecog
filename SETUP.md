@@ -3,7 +3,7 @@
 ## 1. Clone repository từ GitHub
 
 ```bash
-git clone <your-github-url>
+git clone <https://github.com/boanuen/FaceRecog>
 cd detect
 ```
 
@@ -36,7 +36,7 @@ Tải 2 file từ Google Drive:
 - `best.pt` - YOLO26 weights (phát hiện khuôn mặt)
 - `face_db.pt` - ArcFace database (5 mặt đã train)
 
-**Link:** [Folder Weights](your-google-drive-link-here)
+**Link:** https://bit.ly/4zgLmth
 
 **Cách tải:**
 1. Mở link Google Drive
