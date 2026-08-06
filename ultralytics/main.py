@@ -56,20 +56,26 @@ rec.recognize(np.zeros((320, 320, 3), dtype=np.uint8), threshold=THRESHOLD)
 print("[main] Warm-up done")
 
 
-# ── BỘ THEO DÕI + BỎ PHIẾU (làm mượt theo thời gian) ──────────────────────
-_tracks = []   # mỗi track: {'cx','cy','hist':deque(nhãn), 'miss':int}
+# ── BỘ THEO DÕI + LÀM MƯỢT ĐIỂM SỐ (chống nhảy "người lạ") ────────────────
+# Mỗi mặt được ghép với 1 track theo vị trí. Track giữ lịch sử (tên, điểm) vài frame.
+# Quyết định dựa trên ĐIỂM TRUNG BÌNH của danh tính nổi trội trong cửa sổ + HYSTERESIS
+# (đã nhận là ai thì bám lấy, một frame điểm thấp KHÔNG lật ngay sang "lạ").
+_tracks = []   # mỗi track: {'cx','cy','hist':deque((name,score)), 'miss':int, 'label':str}
 
-def smooth_labels(dets, W, H):
-    """dets: list {box, name(str|None)}. Ghép mỗi mặt với track gần nhất theo vị trí,
-    thêm nhãn frame này vào lịch sử, trả nhãn ĐÃ BỎ PHIẾU (đa số cửa sổ gần nhất)."""
+HYSTERESIS  = 0.04   # đã nhận tên → hạ ngưỡng 0.04 để giữ (khó rớt sang "lạ")
+MIN_PRESENCE = 0.5   # danh tính phải xuất hiện >= 50% cửa sổ mới được nhận
+
+def smooth_labels(faces, W, H, threshold):
+    """faces: list {box, best_name, score, ...}. Trả list (label, disp_score) đã làm mượt.
+    label = tên hoặc 'LẠ'. disp_score = điểm trung bình (ổn định, đỡ nhảy %)."""
     global _tracks
-    if SMOOTH_WINDOW <= 1:
-        return [d["name"] or "LẠ" for d in dets]
     thr = 0.12 * (W * W + H * H) ** 0.5   # ngưỡng ghép ~12% đường chéo khung
     used, out = set(), []
-    for d in dets:
-        x1, y1, x2, y2 = d["box"]
+    for f in faces:
+        x1, y1, x2, y2 = f["box"]
         cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        bn, bs = f.get("best_name"), float(f.get("score", 0.0))
+
         bt, bd = None, thr
         for ti, t in enumerate(_tracks):
             if ti in used:
@@ -77,20 +83,41 @@ def smooth_labels(dets, W, H):
             dist = ((t["cx"] - cx) ** 2 + (t["cy"] - cy) ** 2) ** 0.5
             if dist < bd:
                 bd, bt = dist, ti
-        label = d["name"] or "LẠ"
         if bt is None:
-            _tracks.append({"cx": cx, "cy": cy,
-                            "hist": deque([label], maxlen=SMOOTH_WINDOW), "miss": 0})
-            t = _tracks[-1]; used.add(len(_tracks) - 1)
+            t = {"cx": cx, "cy": cy, "hist": deque(maxlen=SMOOTH_WINDOW),
+                 "miss": 0, "label": "LẠ"}
+            _tracks.append(t); used.add(len(_tracks) - 1)
         else:
             t = _tracks[bt]
             t["cx"], t["cy"], t["miss"] = cx, cy, 0
-            t["hist"].append(label); used.add(bt)
-        out.append(Counter(t["hist"]).most_common(1)[0][0])   # nhãn đa số
+            used.add(bt)
+        t["hist"].append((bn, bs))
+
+        # gộp điểm theo từng tên trong cửa sổ → chọn danh tính nổi trội
+        by = defaultdict(list)
+        for n, s in t["hist"]:
+            if n is not None:
+                by[n].append(s)
+        if by:
+            dom = max(by, key=lambda n: (len(by[n]), sum(by[n]) / len(by[n])))
+            mean_s   = sum(by[dom]) / len(by[dom])
+            presence = len(by[dom]) / len(t["hist"])
+            # hysteresis: nếu track đang mang chính tên này → ngưỡng giữ thấp hơn
+            keep_thr = threshold - HYSTERESIS if t["label"] == dom else threshold
+            if presence >= MIN_PRESENCE and mean_s >= keep_thr:
+                t["label"] = dom
+            else:
+                t["label"] = "LẠ"
+            disp = mean_s
+        else:
+            t["label"] = "LẠ"
+            disp = bs
+        out.append((t["label"], round(disp, 3)))
+
     for ti, t in enumerate(_tracks):   # track không thấy frame này → tăng miss
         if ti not in used:
             t["miss"] += 1
-    _tracks = [t for t in _tracks if t["miss"] <= 5]           # bỏ track mất >5 frame
+    _tracks = [t for t in _tracks if t["miss"] <= 8]   # giữ track lâu hơn (mất <=8 frame)
     return out
 
 @app.get("/", response_class=HTMLResponse)
@@ -138,7 +165,7 @@ async def process_frame(
     infer_ms = (time.perf_counter() - t0) * 1000
 
     H, W = img.shape[:2]
-    voted = smooth_labels(faces, W, H)   # nhãn đã bỏ phiếu theo thời gian ('LẠ' = lạ)
+    voted = smooth_labels(faces, W, H, threshold)   # [(label, disp_score)] đã làm mượt
 
     stranger = False
     known = []
@@ -146,17 +173,17 @@ async def process_frame(
 
     # Chỉ TRẢ TOẠ ĐỘ KHUNG (client tự vẽ overlay lên video) — không encode ảnh
     # → nhẹ băng thông, không nhấp nháy, detect nhanh hơn (bỏ imencode + base64).
-    for f, vname in zip(faces, voted):
+    for f, (vname, vscore) in zip(faces, voted):
         x1, y1, x2, y2 = f["box"]
         runner = f.get("runner")
         box = [int(x1), int(y1), int(x2), int(y2)]
         if vname == "LẠ":
             stranger = True
-            detections.append({"name": "Người lạ", "conf": f["score"], "stranger": True,
+            detections.append({"name": "Người lạ", "conf": vscore, "stranger": True,
                                "runner": runner, "box": box})
         else:
             known.append(vname)
-            detections.append({"name": vname, "conf": f["score"], "stranger": False,
+            detections.append({"name": vname, "conf": vscore, "stranger": False,
                                "runner": runner, "box": box})
 
     known_unique = list(dict.fromkeys(known))   # bỏ trùng, giữ thứ tự

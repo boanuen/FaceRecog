@@ -23,8 +23,8 @@ MARGIN = 0.30   # nới quanh box YOLO trước khi đưa vào ArcFace (cần í
 
 class FaceRecognizer:
     def __init__(self, yolo_path=YOLO_PATH, db_path=DB_PATH, device=None,
-                 det_imgsz=320, det_conf=0.25, det_iou=0.45, use_gpu_arcface=False,
-                 arc_det_size=(192, 192)):
+                 det_imgsz=512, det_conf=0.25, det_iou=0.45, use_gpu_arcface=False,
+                 arc_det_size=(224, 224)):
         self.device    = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.det_imgsz = det_imgsz
         self.det_conf  = det_conf

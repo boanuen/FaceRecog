@@ -488,7 +488,9 @@
         let latestDets = [];        // detections mới nhất từ server (giữ giữa các lần detect)
         let detImgW = 640, detImgH = 480;   // kích thước frame đã gửi detect
         let lastSendMs = 0;
-        const DETECT_INTERVAL_MS = 120;     // gửi detect tối đa ~8 lần/giây (đủ mượt, đỡ tải)
+        let lastDraw = 0;
+        const DETECT_INTERVAL_MS = 130;     // gửi detect tối đa ~7-8 lần/giây
+        const DRAW_INTERVAL_MS   = 100;     // vẽ khung ~10fps (video vẫn phát mượt riêng)
 
         // Vòng GỬI DETECT — độc lập với hiển thị
         async function sendFramesLoop() {
@@ -531,9 +533,14 @@
             }
         }
 
-        // Vòng VẼ OVERLAY — chạy mỗi frame màn hình (~60fps), khung luôn mượt
+        // Vòng VẼ OVERLAY — giới hạn ~10fps (video phát mượt độc lập, khung cập nhật đủ dùng)
         function drawOverlayLoop() {
             if (!isStreaming) return;
+            requestAnimationFrame(drawOverlayLoop);
+            let tnow = performance.now();
+            if (tnow - lastDraw < DRAW_INTERVAL_MS) return;   // chặn dưới ~10fps
+            lastDraw = tnow;
+
             const vw = videoElement.videoWidth || 640;
             const vh = videoElement.videoHeight || 480;
             if (overlay.width !== vw)  overlay.width  = vw;   // canvas cùng độ phân giải video
@@ -564,13 +571,10 @@
                 overlayCtx.fillText(label, x1 + 5, y1 - th * 0.28);
             }
 
-            // FPS = số frame màn hình đã vẽ trong 1s (mượt thực tế của video)
-            let now = performance.now();
-            frameTimes.push(now);
-            while (frameTimes.length && now - frameTimes[0] > 1000) frameTimes.shift();
+            // FPS = số lần vẽ khung trong 1s (đã cap ~10fps)
+            frameTimes.push(tnow);
+            while (frameTimes.length && tnow - frameTimes[0] > 1000) frameTimes.shift();
             stFps.innerText = frameTimes.length;
-
-            requestAnimationFrame(drawOverlayLoop);
         }
     </script>
 </body>
