@@ -362,10 +362,13 @@
                 "LẠ":   ["#fbbf24", "LẠ"],
             };
             const [col, tag] = map[ev.status] || ["#94a3b8", ev.status];
+            const mv = ev.motion === "Di chuyển"
+                ? '<span style="color:#38bdf8">⇄ di chuyển</span>'
+                : '<span style="color:#64748b">■ đứng im</span>';
             let el = document.createElement('div');
             el.className = 'log-item';
-            el.innerHTML = `<span><b style="color:${col}">[${tag}]</b> ${ev.person}</span>`
-                         + `<span class="t">${ev.time}</span>`;
+            el.innerHTML = `<span><b style="color:${col}">[${tag}]</b> ${ev.person} `
+                         + `<small>(${mv})</small></span><span class="t">${ev.time}</span>`;
             logBox.prepend(el);
             while (logBox.children.length > 100) logBox.removeChild(logBox.lastChild);
         }
@@ -572,13 +575,14 @@
                 let [x1, y1, x2, y2] = d.box;
                 x1 *= sx; x2 *= sx; y1 *= sy; y2 *= sy;
                 const pct = Math.round((d.conf || 0) * 100);
+                const mv = d.moving ? ' ⇄' : '';   // ⇄ = di chuyển, trống = đứng im
                 let col, label;
                 if (d.pending) {            // chưa nhận diện kịp → xám, không kết luận
                     col = '#94a3b8'; label = '…';
                 } else if (d.stranger) {
-                    col = '#ef4444'; label = `NGƯỜI LẠ ${pct}%`;
+                    col = '#ef4444'; label = `NGƯỜI LẠ ${pct}%${mv}`;
                 } else {
-                    col = '#22c55e'; label = `${d.name} ${pct}%`;
+                    col = '#22c55e'; label = `${d.name} ${pct}%${mv}`;
                 }
 
                 overlayCtx.lineWidth = Math.max(2, vw / 320);

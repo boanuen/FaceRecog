@@ -51,11 +51,16 @@ _in_room: dict[str, datetime] = {}   # name → thời điểm vào phòng
 #   OK   = một track nhận ra người quen (đứng im hay đi qua → chỉ ghi 1 lần/track)
 #   FAIL = track đang là người quen X bỗng thành "người lạ" (nhận dạng hỏng)
 #   LẠ   = người lạ hoàn toàn xuất hiện
+# motion ∈ {"Đứng im","Di chuyển"} — trạng thái chuyển động của mặt lúc xảy ra sự kiện.
 _scan_log: list[dict] = []
+# Chống ghi trùng: person → (status, thời điểm ghi/thấy gần nhất). Đứng im liên tục
+# (dù track bị tái tạo) → chỉ ghi 1 lần vì cùng người+trạng thái trong DEDUP_GAP giây.
+_last_ev: dict = {}
 
-def _log_scan(person: str, status: str):
+def _log_scan(person: str, status: str, motion: str = "Đứng im"):
     _scan_log.append({"dt": datetime.now(), "person": person,
-                      "role": rec.db_roles.get(person, "kỹ sư"), "status": status})
+                      "role": rec.db_roles.get(person, "kỹ sư"),
+                      "status": status, "motion": motion})
 
 print(f"[main] Khởi tạo YOLO26 + ArcFace...")
 rec = FaceRecognizer(det_conf=CONF_DETECT)   # YOLO detect mặt, ArcFace nhận diện tên
@@ -77,6 +82,18 @@ _tracks = []   # mỗi track: {'cx','cy','hist':deque((name,score)), 'miss':int,
 HYSTERESIS  = 0.04    # đã nhận tên → hạ ngưỡng 0.04 để giữ (khó rớt sang "lạ")
 MIN_PRESENCE = 0.5    # danh tính phải xuất hiện >= 50% cửa sổ mới được nhận
 MATCH_FRAC  = 0.18    # ngưỡng ghép track = 18% đường chéo khung (nới để bám khi di chuyển)
+MOVE_STEP_FRAC = 0.15 # bước dịch TRUNG BÌNH/frame > 15% bề rộng mặt → DI CHUYỂN
+DEDUP_GAP   = 4.0     # giây: cùng người + cùng trạng thái trong khoảng này → gộp làm 1
+STRANGER_MIN = 4      # track phải "lạ" liên tục >= 4 frame mới ghi Người lạ (bớt nhầm)
+
+def _is_moving(pos, wsize):
+    """pos: deque (cx,cy). Dùng BƯỚC DỊCH TRUNG BÌNH mỗi frame (ổn định hơn đỉnh):
+    đứng im rung nhẹ → bước nhỏ; đi bộ → bước lớn."""
+    if len(pos) < 3 or wsize <= 0:
+        return False
+    steps = [((pos[i][0] - pos[i-1][0]) ** 2 + (pos[i][1] - pos[i-1][1]) ** 2) ** 0.5
+             for i in range(1, len(pos))]
+    return (sum(steps) / len(steps)) > MOVE_STEP_FRAC * wsize
 
 def _match_thr(W, H):
     return MATCH_FRAC * (W * W + H * H) ** 0.5
@@ -101,13 +118,19 @@ def smooth_labels(faces, W, H, threshold):
                 bd, bt = dist, ti
         if bt is None:
             t = {"cx": cx, "cy": cy, "hist": deque(maxlen=SMOOTH_WINDOW),
-                 "miss": 0, "label": "LẠ", "logged_label": ""}
+                 "miss": 0, "label": "LẠ", "logged_label": "",
+                 "pos": deque(maxlen=SMOOTH_WINDOW), "moving": False}
             _tracks.append(t); used.add(len(_tracks) - 1)
         else:
             t = _tracks[bt]
             t["cx"], t["cy"], t["miss"] = cx, cy, 0
             used.add(bt)
         t["hist"].append((bn, bs))
+
+        # ── ĐO CHUYỂN ĐỘNG: đứng im hay di chuyển ──
+        t["pos"].append((cx, cy))
+        t["moving"] = _is_moving(t["pos"], x2 - x1)
+        motion = "Di chuyển" if t["moving"] else "Đứng im"
 
         # gộp điểm theo từng tên trong cửa sổ → chọn danh tính nổi trội
         by = defaultdict(list)
@@ -130,19 +153,39 @@ def smooth_labels(faces, W, H, threshold):
             disp = bs
         out.append((t["label"], round(disp, 3)))
 
-        # ── GHI NHẬT KÝ QUÉT: chỉ khi NHÃN CAM KẾT của track ĐỔI (tự gộp trùng) ──
+        # ── GHI NHẬT KÝ QUÉT ──
+        # ĐỨNG IM: 1 người → 1 lần (chống trùng theo person + DEDUP_GAP, kể cả track tái tạo).
+        # DI CHUYỂN: ghi OK/FAIL mỗi lần chuyển trạng thái (son→lạ→son…).
+        now = datetime.now()
         old = t.get("logged_label", "")
         new = t["label"]
         if new != old:
-            if new != "LẠ":
-                _log_scan(new, "OK")            # nhận ra người quen (1 lần/track)
-                t["logged_label"] = new
-            elif old not in ("", "LẠ"):
-                _log_scan(old, "FAIL")          # đang là người quen → hỏng thành lạ
-                t["logged_label"] = new
-            elif len(t["hist"]) >= 2:           # người lạ hoàn toàn (đã ổn định ≥2 frame)
-                _log_scan("Người lạ", "LẠ")
-                t["logged_label"] = new
+            ev = None
+            if new != "LẠ" and len(t["hist"]) >= 3:
+                ev = (new, "OK")                 # nhận ra người quen (đủ mẫu để biết đứng/đi)
+            elif new == "LẠ" and old not in ("", "LẠ"):
+                ev = (old, "FAIL")               # đang là người quen → hỏng thành lạ
+            elif new == "LẠ" and old in ("", "LẠ") and len(t["hist"]) >= STRANGER_MIN:
+                ev = ("Người lạ", "LẠ")          # người lạ thật (lạ liên tục đủ lâu)
+            if ev is not None:
+                t["logged_label"] = new          # đã "tiêu thụ" chuyển trạng thái
+                person, status = ev
+                allow = True
+                if status == "FAIL" and not t["moving"]:
+                    allow = False                # đứng im: không ghi FAIL (chỉ 1 dòng OK)
+                last = _last_ev.get(person)
+                if last and last[0] == status and (now - last[1]).total_seconds() < DEDUP_GAP:
+                    allow = False                # cùng người+trạng thái vừa ghi → gộp
+                if allow:
+                    _log_scan(person, status, motion)
+                    _last_ev[person] = (status, now)
+
+        # giữ "sự hiện diện": CHỈ gia hạn khi còn TRONG cửa sổ (đang hiện diện liên tục).
+        # Nếu đã vắng > DEDUP_GAP thì KHÔNG gia hạn → lần OK kế tiếp mới được ghi.
+        pres_key = new if new != "LẠ" else "Người lạ"
+        le = _last_ev.get(pres_key)
+        if le is not None and (now - le[1]).total_seconds() < DEDUP_GAP:
+            _last_ev[pres_key] = (le[0], now)
 
     for ti, t in enumerate(_tracks):   # track không thấy frame này → tăng miss
         if ti not in used:
@@ -201,7 +244,7 @@ async def process_frame(
     voted = smooth_labels(faces, W, H, threshold)   # [(label, disp_score)] đã làm mượt
     # sự kiện quét MỚI sinh ra ở frame này → gửi về client hiện live
     scan_events = [{"time": e["dt"].strftime("%H:%M:%S"), "person": e["person"],
-                    "status": e["status"]} for e in _scan_log[n0:]]
+                    "status": e["status"], "motion": e["motion"]} for e in _scan_log[n0:]]
 
     stranger = False
     known = []
@@ -266,12 +309,14 @@ async def track_faces(
             dist = ((t["cx"] - cx) ** 2 + (t["cy"] - cy) ** 2) ** 0.5
             if dist < bd:
                 bd, best, bi = dist, t, ti
+        moving = False
         if best is not None:
             # GIỮ track sống + cập nhật vị trí ở 5fps → liền mạch khi di chuyển
             best["cx"], best["cy"], best["miss"] = cx, cy, 0
             used.add(bi)
             lab = best.get("label", "LẠ")
             score = best["hist"][-1][1] if best.get("hist") else 0.0
+            moving = best.get("moving", False)
             if lab == "LẠ":
                 name, stranger, pending = "Người lạ", True, False
             else:
@@ -279,7 +324,8 @@ async def track_faces(
         else:
             name, score, stranger, pending = "…", 0.0, False, True   # chưa nhận diện kịp → xám
         dets.append({"name": name, "conf": round(float(score), 3), "stranger": stranger,
-                     "pending": pending, "box": [int(x1), int(y1), int(x2), int(y2)]})
+                     "pending": pending, "moving": moving,
+                     "box": [int(x1), int(y1), int(x2), int(y2)]})
 
     dets.sort(key=lambda d: (not d["stranger"], -d["conf"]))
     return {"img_w": W, "img_h": H, "detections": dets, "count": len(boxes)}
@@ -506,11 +552,11 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict]) -> by
     ws1 = wb.create_sheet("Ngày")
     ORANGE_ROW = PatternFill("solid", fgColor="FDEBD0")
 
-    OK_COLS   = ["STT", "Ngày", "Giờ", "Họ và Tên"]
-    OK_WIDTHS = [5, 10, 10, 22]
+    OK_COLS   = ["STT", "Ngày", "Giờ", "Họ và Tên", "Trạng thái"]
+    OK_WIDTHS = [5, 10, 9, 20, 11]
     NC  = len(OK_COLS)
     KS1 = 1
-    GAP = KS1 + NC            # cột trống giữa 2 bảng (cũng là cột "Kết quả" của bảng fail)
+    GAP = KS1 + NC            # cột giữa 2 bảng (cũng là cột "Kết quả" của bảng fail)
     SV1 = GAP + 1
 
     # tiêu đề 2 bảng
@@ -528,7 +574,7 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict]) -> by
             c.font = HDR_FONT; c.fill = fill; c.alignment = CENTER; c.border = BORDER
         ws1.column_dimensions[get_column_letter(KS1+ci)].width = w
         ws1.column_dimensions[get_column_letter(SV1+ci)].width = w
-    ws1.column_dimensions[get_column_letter(GAP)].width = 12   # gap + cột Kết quả bảng fail
+    ws1.column_dimensions[get_column_letter(GAP)].width = 11   # gap + cột Kết quả bảng fail
     ws1.row_dimensions[2].height = 22
     ws1.freeze_panes = "A3"
 
@@ -541,7 +587,8 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict]) -> by
     def _fill_ok(events, base, alt_fill):
         for i, e in enumerate(events):
             ri = 3 + i
-            vals = [i+1, e["dt"].strftime("%d/%m"), e["dt"].strftime("%H:%M:%S"), e["person"]]
+            vals = [i+1, e["dt"].strftime("%d/%m"), e["dt"].strftime("%H:%M:%S"),
+                    e["person"], e.get("motion", "Đứng im")]
             for ci, val in enumerate(vals):
                 c = ws1.cell(row=ri, column=base+ci, value=val)
                 c.border = BORDER; c.font = NORM
@@ -572,7 +619,7 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict]) -> by
     ws1.row_dimensions[ftitle].height = 26
 
     fhdr = ftitle + 1
-    for ci, h in enumerate(["STT", "Ngày", "Giờ", "Họ và Tên", "Kết quả"]):
+    for ci, h in enumerate(["STT", "Ngày", "Giờ", "Họ và Tên", "Trạng thái", "Kết quả"]):
         c = ws1.cell(row=fhdr, column=1+ci, value=h)
         c.font = HDR_FONT; c.fill = RED_DARK; c.alignment = CENTER; c.border = BORDER
     ws1.row_dimensions[fhdr].height = 22
@@ -582,12 +629,13 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict]) -> by
         ri = fhdr + 1 + i
         fill = RED_ROW if e["status"] == "FAIL" else ORANGE_ROW
         fcol = "C0392B" if e["status"] == "FAIL" else "CA6F1E"
-        vals = [i+1, e["dt"].strftime("%d/%m"), e["dt"].strftime("%H:%M:%S"), e["person"], e["status"]]
+        vals = [i+1, e["dt"].strftime("%d/%m"), e["dt"].strftime("%H:%M:%S"),
+                e["person"], e.get("motion", "Đứng im"), e["status"]]
         for ci, val in enumerate(vals):
             c = ws1.cell(row=ri, column=1+ci, value=val)
             c.border = BORDER; c.fill = fill
             c.alignment = LEFT if ci == 3 else CENTER
-            c.font = Font(bold=True, size=10, color=fcol) if ci == 4 else NORM
+            c.font = Font(bold=True, size=10, color=fcol) if ci == 5 else NORM
         ws1.row_dimensions[ri].height = 20
     if not fails:
         c = ws1.cell(row=fhdr+1, column=1, value="Không có fail / người lạ.")
