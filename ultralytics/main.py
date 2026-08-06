@@ -6,6 +6,7 @@ from fastapi import FastAPI, File, UploadFile, Form, Query
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, StreamingResponse
 from collections import deque, Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
+import asyncio
 import cv2
 import numpy as np
 import base64
@@ -32,18 +33,29 @@ CONF_DETECT = 0.25   # ngưỡng YOLO BẮT mặt (để thấp để không b�
 THRESHOLD   = 0.28   # ngưỡng COSINE (matcher top-5 mean): >= coi là người quen.
                      # Đo trên test: 100% đúng ở 0.25-0.28, 0 nhầm danh tính. Xem eval_recognition.py.
 
-# ── LÀM MƯỢT THEO THỜI GIAN 
-# Quyết định = bỏ phiếu đa số trên vài frame gần nhất của CÙNG một mặt (ghép theo vị trí),
-# thay vì tin từng frame độc lập. Đặt = 1 để tắt.
-SMOOTH_WINDOW = 7
+# ── LÀM MƯỢT THEO THỜI GIAN
+# Quyết định = làm mượt điểm số trên vài frame gần nhất của CÙNG một mặt (ghép theo vị trí).
+# Nhỏ hơn → nhận ra NHANH hơn cho người đi qua; lớn hơn → ổn định hơn cho người đứng im.
+SMOOTH_WINDOW = 5
 
 # Enroll trực tiếp từ webcam: /capture thêm embedding của mặt vào DB (không cần train).
 KNOWN_PEOPLE = ["nghia", "quan", "son", "tri", "tui"]
 
-# ── NHẬT KÝ RA VÀO (lưu toàn bộ phiên, export ra Excel) ─────────────────────
+# ── NHẬT KÝ RA VÀO (lưu toàn bộ phiên, export ra Excel — dùng cho sheet Tuần/Tháng) ──
 # Mỗi entry: {dt, type, person, role, duration_min, ks_present, sv_present, total_ks, total_sv}
 _attendance_log: list[dict] = []
 _in_room: dict[str, datetime] = {}   # name → thời điểm vào phòng
+
+# ── NHẬT KÝ QUÉT MẶT (mỗi lần 1 track ĐỔI trạng thái — dùng cho sheet Ngày) ──
+# Mỗi entry: {dt, person, role, status}  status ∈ {"OK","FAIL","LẠ"}
+#   OK   = một track nhận ra người quen (đứng im hay đi qua → chỉ ghi 1 lần/track)
+#   FAIL = track đang là người quen X bỗng thành "người lạ" (nhận dạng hỏng)
+#   LẠ   = người lạ hoàn toàn xuất hiện
+_scan_log: list[dict] = []
+
+def _log_scan(person: str, status: str):
+    _scan_log.append({"dt": datetime.now(), "person": person,
+                      "role": rec.db_roles.get(person, "kỹ sư"), "status": status})
 
 print(f"[main] Khởi tạo YOLO26 + ArcFace...")
 rec = FaceRecognizer(det_conf=CONF_DETECT)   # YOLO detect mặt, ArcFace nhận diện tên
@@ -62,14 +74,18 @@ print("[main] Warm-up done")
 # (đã nhận là ai thì bám lấy, một frame điểm thấp KHÔNG lật ngay sang "lạ").
 _tracks = []   # mỗi track: {'cx','cy','hist':deque((name,score)), 'miss':int, 'label':str}
 
-HYSTERESIS  = 0.04   # đã nhận tên → hạ ngưỡng 0.04 để giữ (khó rớt sang "lạ")
-MIN_PRESENCE = 0.5   # danh tính phải xuất hiện >= 50% cửa sổ mới được nhận
+HYSTERESIS  = 0.04    # đã nhận tên → hạ ngưỡng 0.04 để giữ (khó rớt sang "lạ")
+MIN_PRESENCE = 0.5    # danh tính phải xuất hiện >= 50% cửa sổ mới được nhận
+MATCH_FRAC  = 0.18    # ngưỡng ghép track = 18% đường chéo khung (nới để bám khi di chuyển)
+
+def _match_thr(W, H):
+    return MATCH_FRAC * (W * W + H * H) ** 0.5
 
 def smooth_labels(faces, W, H, threshold):
     """faces: list {box, best_name, score, ...}. Trả list (label, disp_score) đã làm mượt.
     label = tên hoặc 'LẠ'. disp_score = điểm trung bình (ổn định, đỡ nhảy %)."""
     global _tracks
-    thr = 0.12 * (W * W + H * H) ** 0.5   # ngưỡng ghép ~12% đường chéo khung
+    thr = _match_thr(W, H)
     used, out = set(), []
     for f in faces:
         x1, y1, x2, y2 = f["box"]
@@ -85,7 +101,7 @@ def smooth_labels(faces, W, H, threshold):
                 bd, bt = dist, ti
         if bt is None:
             t = {"cx": cx, "cy": cy, "hist": deque(maxlen=SMOOTH_WINDOW),
-                 "miss": 0, "label": "LẠ"}
+                 "miss": 0, "label": "LẠ", "logged_label": ""}
             _tracks.append(t); used.add(len(_tracks) - 1)
         else:
             t = _tracks[bt]
@@ -113,6 +129,20 @@ def smooth_labels(faces, W, H, threshold):
             t["label"] = "LẠ"
             disp = bs
         out.append((t["label"], round(disp, 3)))
+
+        # ── GHI NHẬT KÝ QUÉT: chỉ khi NHÃN CAM KẾT của track ĐỔI (tự gộp trùng) ──
+        old = t.get("logged_label", "")
+        new = t["label"]
+        if new != old:
+            if new != "LẠ":
+                _log_scan(new, "OK")            # nhận ra người quen (1 lần/track)
+                t["logged_label"] = new
+            elif old not in ("", "LẠ"):
+                _log_scan(old, "FAIL")          # đang là người quen → hỏng thành lạ
+                t["logged_label"] = new
+            elif len(t["hist"]) >= 2:           # người lạ hoàn toàn (đã ổn định ≥2 frame)
+                _log_scan("Người lạ", "LẠ")
+                t["logged_label"] = new
 
     for ti, t in enumerate(_tracks):   # track không thấy frame này → tăng miss
         if ti not in used:
@@ -161,11 +191,17 @@ async def process_frame(
 
     rec.det_conf = conf_detect
     t0 = time.perf_counter()
-    faces = rec.recognize(img, threshold=threshold)
+    # chạy nhận diện (nặng, CPU) trong threadpool → không chặn endpoint /track (YOLO nhanh)
+    loop = asyncio.get_event_loop()
+    faces = await loop.run_in_executor(executor, lambda: rec.recognize(img, threshold=threshold))
     infer_ms = (time.perf_counter() - t0) * 1000
 
     H, W = img.shape[:2]
+    n0 = len(_scan_log)
     voted = smooth_labels(faces, W, H, threshold)   # [(label, disp_score)] đã làm mượt
+    # sự kiện quét MỚI sinh ra ở frame này → gửi về client hiện live
+    scan_events = [{"time": e["dt"].strftime("%H:%M:%S"), "person": e["person"],
+                    "status": e["status"]} for e in _scan_log[n0:]]
 
     stranger = False
     known = []
@@ -196,7 +232,57 @@ async def process_frame(
         "detections": detections,
         "count": len(faces),
         "infer_ms": round(infer_ms, 1),
+        "scan_events": scan_events,   # sự kiện OK/FAIL/LẠ mới (hiện live trên UI)
     }
+
+
+@app.post("/track")
+async def track_faces(
+    file: UploadFile = File(...),
+    conf_detect: float = Form(CONF_DETECT),
+):
+    """CHỈ chạy YOLO (nhanh ~50ms) → trả TOẠ ĐỘ KHUNG bám sát thời gian thực.
+    Tên/điểm lấy từ track gần nhất (do /process-frame cập nhật) → không phải chờ ArcFace.
+    Client gọi endpoint này liên tục cho khung mượt + biến mất nhanh khi rời khung hình."""
+    contents = await file.read()
+    img = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return JSONResponse({"status": "error", "message": "Invalid image"}, status_code=400)
+
+    rec.det_conf = min(max(conf_detect, 0.05), 0.9)
+    loop = asyncio.get_event_loop()
+    boxes = await loop.run_in_executor(executor, rec.detect, img)   # YOLO only
+
+    H, W = img.shape[:2]
+    match_thr = _match_thr(W, H)
+    used, dets = set(), []
+    for (x1, y1, x2, y2, conf) in boxes:
+        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        # ghép khung với track gần nhất để lấy nhãn đã nhận diện gần đây
+        best, bi, bd = None, -1, match_thr
+        for ti, t in enumerate(_tracks):
+            if ti in used:
+                continue
+            dist = ((t["cx"] - cx) ** 2 + (t["cy"] - cy) ** 2) ** 0.5
+            if dist < bd:
+                bd, best, bi = dist, t, ti
+        if best is not None:
+            # GIỮ track sống + cập nhật vị trí ở 5fps → liền mạch khi di chuyển
+            best["cx"], best["cy"], best["miss"] = cx, cy, 0
+            used.add(bi)
+            lab = best.get("label", "LẠ")
+            score = best["hist"][-1][1] if best.get("hist") else 0.0
+            if lab == "LẠ":
+                name, stranger, pending = "Người lạ", True, False
+            else:
+                name, stranger, pending = lab, False, False
+        else:
+            name, score, stranger, pending = "…", 0.0, False, True   # chưa nhận diện kịp → xám
+        dets.append({"name": name, "conf": round(float(score), 3), "stranger": stranger,
+                     "pending": pending, "box": [int(x1), int(y1), int(x2), int(y2)]})
+
+    dets.sort(key=lambda d: (not d["stranger"], -d["conf"]))
+    return {"img_w": W, "img_h": H, "detections": dets, "count": len(boxes)}
 
 
 @app.post("/capture")
@@ -330,11 +416,11 @@ def _sessions_from_events(events: list[dict]) -> list[dict]:
     return sorted(sessions, key=lambda s: s["entry_dt"])
 
 
-def _make_excel(events: list[dict], people: list[dict]) -> bytes:
+def _make_excel(events: list[dict], scans: list[dict], people: list[dict]) -> bytes:
     """
     3 sheet: Ngay / Tuan / Thang.
-    Moi sheet: moi (ngay/tuan/thang) 1 nhom hang (separator + hang nguoi + dong tong).
-    Moi sheet chia doi: BANG KY SU (trai) | BANG SINH VIEN (phai).
+    - Ngay : NHẬT KÝ QUÉT (mỗi sự kiện OK/FAIL/LẠ 1 dòng), nhóm theo ngày.
+    - Tuan/Thang: bảng chấm công theo phiên (giữ nguyên như cũ).
     """
     from openpyxl.utils import get_column_letter
 
@@ -413,80 +499,99 @@ def _make_excel(events: list[dict], people: list[dict]) -> bytes:
     wb.remove(wb.active)
 
     # ════════════════════════════════════════════════════════════════════════
-    # SHEET NGÀY  —  list tất cả hoạt động (sessions) trong ngày
-    # Cột: STT | Họ và Tên | Giờ vào | Thời gian (duration)
+    # SHEET NGÀY  —  NHẬT KÝ QUÉT
+    #   BẢNG KỸ SƯ (trái) | BẢNG SINH VIÊN (phải)  → các lần nhận diện OK
+    #   BẢNG NGƯỜI LẠ / FAIL (bên dưới)            → các lần fail + người lạ
     # ════════════════════════════════════════════════════════════════════════
-    D_COLS  = ["STT", "Họ và Tên", "Giờ vào", "Thời gian"]
-    D_WIDTHS= [5, 22, 10, 15]
-    D_NCOLS = len(D_COLS)
-    KS1 = 1
-    SV1 = KS1 + D_NCOLS + 1
-
     ws1 = wb.create_sheet("Ngày")
+    ORANGE_ROW = PatternFill("solid", fgColor="FDEBD0")
 
-    ws1.merge_cells(start_row=1, start_column=KS1, end_row=1, end_column=KS1+D_NCOLS-1)
-    c = ws1.cell(row=1, column=KS1, value="BẢNG KỸ SƯ")
+    OK_COLS   = ["STT", "Ngày", "Giờ", "Họ và Tên"]
+    OK_WIDTHS = [5, 10, 10, 22]
+    NC  = len(OK_COLS)
+    KS1 = 1
+    GAP = KS1 + NC            # cột trống giữa 2 bảng (cũng là cột "Kết quả" của bảng fail)
+    SV1 = GAP + 1
+
+    # tiêu đề 2 bảng
+    ws1.merge_cells(start_row=1, start_column=KS1, end_row=1, end_column=KS1+NC-1)
+    c = ws1.cell(row=1, column=KS1, value="BẢNG KỸ SƯ  (nhận diện OK)")
     c.font = TITLE_FONT; c.fill = TITLE_KS; c.alignment = CENTER
-
-    ws1.merge_cells(start_row=1, start_column=SV1, end_row=1, end_column=SV1+D_NCOLS-1)
-    c = ws1.cell(row=1, column=SV1, value="BẢNG SINH VIÊN")
+    ws1.merge_cells(start_row=1, start_column=SV1, end_row=1, end_column=SV1+NC-1)
+    c = ws1.cell(row=1, column=SV1, value="BẢNG SINH VIÊN  (nhận diện OK)")
     c.font = TITLE_FONT; c.fill = TITLE_SV; c.alignment = CENTER
     ws1.row_dimensions[1].height = 26
 
-    for ci, (h, w) in enumerate(zip(D_COLS, D_WIDTHS)):
+    for ci, (h, w) in enumerate(zip(OK_COLS, OK_WIDTHS)):
         for start, fill in [(KS1, HDR_KS), (SV1, HDR_SV)]:
             c = ws1.cell(row=2, column=start+ci, value=h)
             c.font = HDR_FONT; c.fill = fill; c.alignment = CENTER; c.border = BORDER
         ws1.column_dimensions[get_column_letter(KS1+ci)].width = w
         ws1.column_dimensions[get_column_letter(SV1+ci)].width = w
-    ws1.column_dimensions[get_column_letter(KS1+D_NCOLS)].width = 2
+    ws1.column_dimensions[get_column_letter(GAP)].width = 12   # gap + cột Kết quả bảng fail
     ws1.row_dimensions[2].height = 22
-    ws1.freeze_panes = "B3"
+    ws1.freeze_panes = "A3"
 
-    # Tách sessions theo role
-    ks_sessions = [s for s in all_sessions if s["role"] == "kỹ sư"]
-    sv_sessions = [s for s in all_sessions if s["role"] == "sinh viên"]
+    # tách sự kiện OK theo vai trò
+    ok_ks = sorted([e for e in scans if e["status"] == "OK" and e["role"] == "kỹ sư"],
+                   key=lambda e: e["dt"])
+    ok_sv = sorted([e for e in scans if e["status"] == "OK" and e["role"] == "sinh viên"],
+                   key=lambda e: e["dt"])
 
-    # Đếm người có mặt
-    ks_present_today = len({s["person"] for s in ks_sessions if s["date"] == today})
-    sv_present_today = len({s["person"] for s in sv_sessions if s["date"] == today})
-
-    cur_row = 3
-    max_sessions = max(len(ks_sessions), len(sv_sessions), 1)
-    for i in range(max_sessions):
-        ri = cur_row + i
-        ws1.row_dimensions[ri].height = 20
-        alt = i % 2 == 1
-
-        if i < len(ks_sessions):
-            s = ks_sessions[i]
-            vals = [i+1, s["person"], s["entry_dt"].strftime("%H:%M"), _fmt_dur(s.get("duration_min", 0))]
+    def _fill_ok(events, base, alt_fill):
+        for i, e in enumerate(events):
+            ri = 3 + i
+            vals = [i+1, e["dt"].strftime("%d/%m"), e["dt"].strftime("%H:%M:%S"), e["person"]]
             for ci, val in enumerate(vals):
-                c = ws1.cell(row=ri, column=KS1+ci, value=val)
+                c = ws1.cell(row=ri, column=base+ci, value=val)
                 c.border = BORDER; c.font = NORM
-                c.alignment = LEFT if ci == 1 else CENTER
-                if alt: c.fill = ALT_KS
+                c.alignment = LEFT if ci == 3 else CENTER
+                if i % 2 == 1: c.fill = alt_fill
+            ws1.row_dimensions[ri].height = 20
 
-        if i < len(sv_sessions):
-            s = sv_sessions[i]
-            vals = [i+1, s["person"], s["entry_dt"].strftime("%H:%M"), _fmt_dur(s.get("duration_min", 0))]
-            for ci, val in enumerate(vals):
-                c = ws1.cell(row=ri, column=SV1+ci, value=val)
-                c.border = BORDER; c.font = NORM
-                c.alignment = LEFT if ci == 1 else CENTER
-                if alt: c.fill = ALT_SV
+    _fill_ok(ok_ks, KS1, ALT_KS)
+    _fill_ok(ok_sv, SV1, ALT_SV)
 
-    cur_row += max_sessions
-
-    # Summary row
-    ws1.merge_cells(start_row=cur_row, start_column=KS1, end_row=cur_row, end_column=KS1+D_NCOLS-1)
-    c = ws1.cell(row=cur_row, column=KS1, value=f"Có mặt: {ks_present_today}/{total_ks}")
+    n_rows  = max(len(ok_ks), len(ok_sv), 1)
+    sum_row = 3 + n_rows
+    ws1.merge_cells(start_row=sum_row, start_column=KS1, end_row=sum_row, end_column=KS1+NC-1)
+    c = ws1.cell(row=sum_row, column=KS1,
+                 value=f"KS: {len(ok_ks)} lần OK  ({len({e['person'] for e in ok_ks})} người)")
     c.font = SUM_FONT; c.fill = SUM_KS; c.alignment = CENTER
-
-    ws1.merge_cells(start_row=cur_row, start_column=SV1, end_row=cur_row, end_column=SV1+D_NCOLS-1)
-    c = ws1.cell(row=cur_row, column=SV1, value=f"Có mặt: {sv_present_today}/{total_sv}")
+    ws1.merge_cells(start_row=sum_row, start_column=SV1, end_row=sum_row, end_column=SV1+NC-1)
+    c = ws1.cell(row=sum_row, column=SV1,
+                 value=f"SV: {len(ok_sv)} lần OK  ({len({e['person'] for e in ok_sv})} người)")
     c.font = SUM_FONT; c.fill = SUM_SV; c.alignment = CENTER
-    ws1.row_dimensions[cur_row].height = 22
+    ws1.row_dimensions[sum_row].height = 22
+
+    # ── BẢNG NGƯỜI LẠ / FAIL (bên dưới, span toàn bộ) ──
+    ftitle = sum_row + 2      # STT | Ngày | Giờ | Họ và Tên | Kết quả (cột Kết quả = cột GAP)
+    ws1.merge_cells(start_row=ftitle, start_column=1, end_row=ftitle, end_column=SV1+NC-1)
+    c = ws1.cell(row=ftitle, column=1, value="BẢNG NGƯỜI LẠ / NHẬN DIỆN FAIL")
+    c.font = TITLE_FONT; c.fill = RED_DARK; c.alignment = CENTER
+    ws1.row_dimensions[ftitle].height = 26
+
+    fhdr = ftitle + 1
+    for ci, h in enumerate(["STT", "Ngày", "Giờ", "Họ và Tên", "Kết quả"]):
+        c = ws1.cell(row=fhdr, column=1+ci, value=h)
+        c.font = HDR_FONT; c.fill = RED_DARK; c.alignment = CENTER; c.border = BORDER
+    ws1.row_dimensions[fhdr].height = 22
+
+    fails = sorted([e for e in scans if e["status"] in ("FAIL", "LẠ")], key=lambda e: e["dt"])
+    for i, e in enumerate(fails):
+        ri = fhdr + 1 + i
+        fill = RED_ROW if e["status"] == "FAIL" else ORANGE_ROW
+        fcol = "C0392B" if e["status"] == "FAIL" else "CA6F1E"
+        vals = [i+1, e["dt"].strftime("%d/%m"), e["dt"].strftime("%H:%M:%S"), e["person"], e["status"]]
+        for ci, val in enumerate(vals):
+            c = ws1.cell(row=ri, column=1+ci, value=val)
+            c.border = BORDER; c.fill = fill
+            c.alignment = LEFT if ci == 3 else CENTER
+            c.font = Font(bold=True, size=10, color=fcol) if ci == 4 else NORM
+        ws1.row_dimensions[ri].height = 20
+    if not fails:
+        c = ws1.cell(row=fhdr+1, column=1, value="Không có fail / người lạ.")
+        c.font = NORM; c.alignment = LEFT
 
     # ════════════════════════════════════════════════════════════════════════
     # SHEET TUẦN  —  mỗi tuần 1 nhóm (separator + hàng người + dòng tổng)
@@ -687,7 +792,7 @@ def _make_excel(events: list[dict], people: list[dict]) -> bytes:
 @app.get("/export")
 def export_attendance():
     """Xuat nhat ky ra Excel (3 sheet: Ngay / Tuan / Thang)."""
-    data = _make_excel(_attendance_log, rec.people_summary())
+    data = _make_excel(_attendance_log, _scan_log, rec.people_summary())
     filename = f"nhat_ky_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     return StreamingResponse(
         io.BytesIO(data),

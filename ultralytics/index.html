@@ -267,9 +267,10 @@
                 placeholder.style.display = 'none';
                 setStatus("Camera đang chạy...", "#166534", "#4ade80");
                 frameTimes = [];
-                latestDets = [];
-                sendFramesLoop();   // gửi frame đi detect (throttle)
-                drawOverlayLoop();  // vẽ khung lên overlay mỗi frame (mượt, không nhấp nháy)
+                latestBoxes = [];
+                trackLoop();        // khung nhanh (YOLO ~5fps) — bám sát, mất nhanh khi rời
+                recogLoop();        // tên (ArcFace, thưa)
+                drawOverlayLoop();  // vẽ khung lên overlay
             } catch (err) {
                 setStatus("Lỗi cấp quyền Cam!", "#991b1b", "#f87171");
                 alert("Lỗi mở Cam: " + err.message + "\nHãy kiểm tra biểu tượng Camera trên thanh địa chỉ đã chọn Allow chưa!");
@@ -286,7 +287,7 @@
         function stopCamera() {
             stopCameraTracks();
             videoElement.style.display = 'none';
-            latestDets = [];
+            latestBoxes = [];
             overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
             placeholder.innerText = "Camera đã tắt";
             placeholder.style.display = 'block';
@@ -343,31 +344,30 @@
             stFace.innerText = data.count || 0;
             stMs.innerText = data.infer_ms != null ? data.infer_ms : 0;
 
-            // 4) Nhật ký + gửi event backend — chỉ khi danh sách người quen THAY ĐỔI
+            // 4) Gửi danh sách người quen lên backend (feed sheet Tuần/Tháng vào/ra)
             let knownKey = known.slice().sort().join(",");
             if (knownKey !== lastKnownKey) {
                 lastKnownKey = knownKey;
-                // Gửi danh sách hiện tại lên backend (backend tự tính vào/ra)
                 postLogEvent(known);
-                // Hiển thị trong UI log
-                if (known.length > 0 || data.stranger) {
-                    let now = new Date().toLocaleTimeString('vi-VN');
-                    let knownTxt = dets.filter(d => !d.stranger)
-                                       .map(d => `${d.name} ${Math.round(d.conf * 100)}%`)
-                                       .join(", ");
-                    let txt = data.stranger ? ("Người lạ" + (knownTxt ? " + " + knownTxt : ""))
-                                            : knownTxt;
-                    addLog(now, txt, data.stranger);
-                }
             }
+            // Nhật ký UI giờ do scan_events (OK/FAIL/LẠ) điều khiển — xem addScanLog().
         }
 
-        function addLog(time, txt, isAlert) {
+        // Nhật ký UI: mỗi sự kiện quét OK/FAIL/LẠ 1 dòng (khớp sheet Ngày của Excel)
+        function addScanLog(ev) {
             if (logBox.querySelector('.empty')) logBox.innerHTML = '';
+            const map = {
+                "OK":   ["#4ade80", "OK"],
+                "FAIL": ["#f87171", "FAIL"],
+                "LẠ":   ["#fbbf24", "LẠ"],
+            };
+            const [col, tag] = map[ev.status] || ["#94a3b8", ev.status];
             let el = document.createElement('div');
             el.className = 'log-item';
-            el.innerHTML = `<span style="color:${isAlert ? '#f87171' : '#4ade80'}">${txt}</span><span class="t">${time}</span>`;
+            el.innerHTML = `<span><b style="color:${col}">[${tag}]</b> ${ev.person}</span>`
+                         + `<span class="t">${ev.time}</span>`;
             logBox.prepend(el);
+            while (logBox.children.length > 100) logBox.removeChild(logBox.lastChild);
         }
 
         async function postLogEvent(knownNames) {
@@ -479,84 +479,107 @@
             }, 'image/jpeg', 0.92);
         }
 
-        // ── KIẾN TRÚC OVERLAY ──────────────────────────────────────────────
-        //  • <video> hiển thị TRỰC TIẾP → mượt, GPU tăng tốc, không re-encode.
-        //  • drawOverlayLoop() vẽ khung lên <canvas> mỗi frame từ latestDets
-        //    → khung ĐỨNG YÊN giữa các lần detect (không nhấp nháy).
-        //  • sendFramesLoop() chỉ gửi ảnh đi detect (throttle), KHÔNG đụng hiển thị.
-        let processingFrame = false;
-        let latestDets = [];        // detections mới nhất từ server (giữ giữa các lần detect)
-        let detImgW = 640, detImgH = 480;   // kích thước frame đã gửi detect
-        let lastSendMs = 0;
-        let lastDraw = 0;
-        const DETECT_INTERVAL_MS = 130;     // gửi detect tối đa ~7-8 lần/giây
-        const DRAW_INTERVAL_MS   = 100;     // vẽ khung ~10fps (video vẫn phát mượt riêng)
+        // ── KIẾN TRÚC 2 VÒNG: KHUNG NHANH + TÊN THƯA ───────────────────────
+        //  • <video> phát trực tiếp → mượt.
+        //  • trackLoop  → /track (CHỈ YOLO ~50ms) ~5fps: khung bám sát, rời khung
+        //    hình là MẤT trong ~250ms (không phải chờ ArcFace).
+        //  • recogLoop  → /process-frame (ArcFace) THƯA hơn: cập nhật TÊN + panel;
+        //    server nhớ nhãn theo vị trí để /track gắn tên vào khung.
+        //  • drawOverlayLoop → vẽ khung từ latestBoxes.
+        let processingFrame = false;   // /process-frame đang chạy
+        let trackBusy = false;         // /track đang chạy
+        let latestBoxes = [];          // khung mới nhất (từ /track)
+        let detImgW = 640, detImgH = 480;
+        let lastTrackMs = 0, lastRecogMs = 0, lastDraw = 0;
+        const TRACK_INTERVAL_MS = 200;   // /track ~5fps → khung + phát hiện rời khung hình
+        const RECOG_INTERVAL_MS = 300;   // /process-frame ~3fps → nhận diện tên (người di chuyển)
+        const DRAW_INTERVAL_MS  = 100;   // vẽ khung ~10fps (rẻ, chỉ tô canvas)
 
-        // Vòng GỬI DETECT — độc lập với hiển thị
-        async function sendFramesLoop() {
+        function grabBlob(cb, quality) {
+            let vw = videoElement.videoWidth, vh = videoElement.videoHeight;
+            if (!vw) { cb(null); return; }
+            canvas.width = vw; canvas.height = vh;
+            canvas.getContext('2d').drawImage(videoElement, 0, 0, vw, vh);
+            canvas.toBlob(cb, 'image/jpeg', quality);
+        }
+
+        // VÒNG KHUNG NHANH — chỉ YOLO, cho khung bám sát thời gian thực
+        function trackLoop() {
             if (!isStreaming) return;
+            requestAnimationFrame(trackLoop);
             let now = performance.now();
-            if (!processingFrame && now - lastSendMs >= DETECT_INTERVAL_MS
-                && videoElement.videoWidth) {
-                lastSendMs = now;
-                processingFrame = true;
-                let vw = videoElement.videoWidth, vh = videoElement.videoHeight;
-                canvas.width = vw; canvas.height = vh;
-                canvas.getContext('2d').drawImage(videoElement, 0, 0, vw, vh);
-                canvas.toBlob(sendDetectionAsync, 'image/jpeg', 0.7);
-            }
-            requestAnimationFrame(sendFramesLoop);
+            if (trackBusy || now - lastTrackMs < TRACK_INTERVAL_MS || !videoElement.videoWidth) return;
+            lastTrackMs = now; trackBusy = true;
+            grabBlob(async function(blob) {
+                if (!blob || !isStreaming) { trackBusy = false; return; }
+                let fd = new FormData();
+                fd.append('file', blob, 'f.jpg');
+                fd.append('conf_detect', cdSlider.value);
+                try {
+                    let data = await (await fetch('/track', { method: 'POST', body: fd })).json();
+                    latestBoxes = data.detections || [];
+                    detImgW = data.img_w || 640;
+                    detImgH = data.img_h || 480;
+                    // FPS = nhịp cập nhật khung (/track)
+                    let t = performance.now();
+                    frameTimes.push(t);
+                    while (frameTimes.length && t - frameTimes[0] > 1000) frameTimes.shift();
+                    stFps.innerText = frameTimes.length;
+                } catch (e) { /* silent */ } finally { trackBusy = false; }
+            }, 0.6);
         }
 
-        async function sendDetectionAsync(blob) {
-            if (!blob || !isStreaming) { processingFrame = false; return; }
-            let fd = new FormData();
-            fd.append('file', blob, 'frame.jpg');
-            fd.append('conf_known', ckSlider.value);
-            fd.append('conf_detect', cdSlider.value);
-            try {
-                let res = await fetch('/process-frame', { method: 'POST', body: fd });
-                let data = await res.json();
-                latestDets = data.detections || [];
-                detImgW = data.img_w || 640;
-                detImgH = data.img_h || 480;
-
-                let now = performance.now();
-                if (now - lastRender >= RENDER_MS) {
-                    renderResults(data);
-                    lastRender = now;
-                }
-            } catch (e) {
-                console.error("Lỗi gửi detect:", e);
-            } finally {
-                processingFrame = false;
-            }
+        // VÒNG NHẬN DIỆN TÊN — ArcFace, gọi thưa (danh tính không đổi nhanh)
+        function recogLoop() {
+            if (!isStreaming) return;
+            requestAnimationFrame(recogLoop);
+            let now = performance.now();
+            if (processingFrame || now - lastRecogMs < RECOG_INTERVAL_MS || !videoElement.videoWidth) return;
+            lastRecogMs = now; processingFrame = true;
+            grabBlob(async function(blob) {
+                if (!blob || !isStreaming) { processingFrame = false; return; }
+                let fd = new FormData();
+                fd.append('file', blob, 'f.jpg');
+                fd.append('conf_known', ckSlider.value);
+                fd.append('conf_detect', cdSlider.value);
+                try {
+                    let data = await (await fetch('/process-frame', { method: 'POST', body: fd })).json();
+                    // sự kiện quét OK/FAIL/LẠ → ghi ngay vào nhật ký UI (không throttle)
+                    (data.scan_events || []).forEach(addScanLog);
+                    let t = performance.now();
+                    if (t - lastRender >= RENDER_MS) { renderResults(data); lastRender = t; }
+                } catch (e) { /* silent */ } finally { processingFrame = false; }
+            }, 0.7);
         }
 
-        // Vòng VẼ OVERLAY — giới hạn ~10fps (video phát mượt độc lập, khung cập nhật đủ dùng)
+        // VÒNG VẼ KHUNG — tô latestBoxes lên overlay
         function drawOverlayLoop() {
             if (!isStreaming) return;
             requestAnimationFrame(drawOverlayLoop);
             let tnow = performance.now();
-            if (tnow - lastDraw < DRAW_INTERVAL_MS) return;   // chặn dưới ~10fps
+            if (tnow - lastDraw < DRAW_INTERVAL_MS) return;
             lastDraw = tnow;
 
             const vw = videoElement.videoWidth || 640;
             const vh = videoElement.videoHeight || 480;
-            if (overlay.width !== vw)  overlay.width  = vw;   // canvas cùng độ phân giải video
+            if (overlay.width !== vw)  overlay.width  = vw;
             if (overlay.height !== vh) overlay.height = vh;
-
             overlayCtx.clearRect(0, 0, vw, vh);
 
-            // toạ độ khung do server trả theo kích thước frame đã gửi → scale về video hiện tại
             const sx = vw / detImgW, sy = vh / detImgH;
-            for (const d of latestDets) {
+            for (const d of latestBoxes) {
                 if (!d.box) continue;
                 let [x1, y1, x2, y2] = d.box;
                 x1 *= sx; x2 *= sx; y1 *= sy; y2 *= sy;
-                const col = d.stranger ? '#ef4444' : '#22c55e';
                 const pct = Math.round((d.conf || 0) * 100);
-                const label = d.stranger ? `NGƯỜI LẠ ${pct}%` : `${d.name} ${pct}%`;
+                let col, label;
+                if (d.pending) {            // chưa nhận diện kịp → xám, không kết luận
+                    col = '#94a3b8'; label = '…';
+                } else if (d.stranger) {
+                    col = '#ef4444'; label = `NGƯỜI LẠ ${pct}%`;
+                } else {
+                    col = '#22c55e'; label = `${d.name} ${pct}%`;
+                }
 
                 overlayCtx.lineWidth = Math.max(2, vw / 320);
                 overlayCtx.strokeStyle = col;
@@ -570,11 +593,6 @@
                 overlayCtx.fillStyle = '#fff';
                 overlayCtx.fillText(label, x1 + 5, y1 - th * 0.28);
             }
-
-            // FPS = số lần vẽ khung trong 1s (đã cap ~10fps)
-            frameTimes.push(tnow);
-            while (frameTimes.length && tnow - frameTimes[0] > 1000) frameTimes.shift();
-            stFps.innerText = frameTimes.length;
         }
     </script>
 </body>
