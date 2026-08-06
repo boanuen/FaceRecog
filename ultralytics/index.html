@@ -494,16 +494,20 @@
         let latestBoxes = [];          // khung mới nhất (từ /track)
         let detImgW = 640, detImgH = 480;
         let lastTrackMs = 0, lastRecogMs = 0, lastDraw = 0;
-        const TRACK_INTERVAL_MS = 200;   // /track ~5fps → khung + phát hiện rời khung hình
-        const RECOG_INTERVAL_MS = 300;   // /process-frame ~3fps → nhận diện tên (người di chuyển)
-        const DRAW_INTERVAL_MS  = 100;   // vẽ khung ~10fps (rẻ, chỉ tô canvas)
+        const TRACK_INTERVAL_MS = 100;   // /track ~10fps → khung bám sát khi di chuyển
+        const RECOG_INTERVAL_MS = 300;   // /process-frame ~3fps → nhận diện tên
+        const DRAW_INTERVAL_MS  = 66;    // vẽ khung ~15fps
+        let trackCanvas = document.createElement('canvas');   // canvas riêng, nhỏ, cho /track
 
-        function grabBlob(cb, quality) {
+        // Chụp 1 frame (tùy chọn thu nhỏ về maxW cho nhanh). maxW=0 → giữ nguyên độ nét.
+        function grabScaled(cvs, maxW, quality, cb) {
             let vw = videoElement.videoWidth, vh = videoElement.videoHeight;
             if (!vw) { cb(null); return; }
-            canvas.width = vw; canvas.height = vh;
-            canvas.getContext('2d').drawImage(videoElement, 0, 0, vw, vh);
-            canvas.toBlob(cb, 'image/jpeg', quality);
+            let scale = (maxW && vw > maxW) ? maxW / vw : 1;
+            let w = Math.round(vw * scale), h = Math.round(vh * scale);
+            cvs.width = w; cvs.height = h;
+            cvs.getContext('2d').drawImage(videoElement, 0, 0, w, h);
+            cvs.toBlob(cb, 'image/jpeg', quality);
         }
 
         // VÒNG KHUNG NHANH — chỉ YOLO, cho khung bám sát thời gian thực
@@ -513,7 +517,8 @@
             let now = performance.now();
             if (trackBusy || now - lastTrackMs < TRACK_INTERVAL_MS || !videoElement.videoWidth) return;
             lastTrackMs = now; trackBusy = true;
-            grabBlob(async function(blob) {
+            // ảnh NHỎ (≤480px) + nén mạnh → /track nhanh, khung bám sát khi di chuyển
+            grabScaled(trackCanvas, 480, 0.5, async function(blob) {
                 if (!blob || !isStreaming) { trackBusy = false; return; }
                 let fd = new FormData();
                 fd.append('file', blob, 'f.jpg');
@@ -529,7 +534,7 @@
                     while (frameTimes.length && t - frameTimes[0] > 1000) frameTimes.shift();
                     stFps.innerText = frameTimes.length;
                 } catch (e) { /* silent */ } finally { trackBusy = false; }
-            }, 0.6);
+            });
         }
 
         // VÒNG NHẬN DIỆN TÊN — ArcFace, gọi thưa (danh tính không đổi nhanh)
@@ -539,7 +544,8 @@
             let now = performance.now();
             if (processingFrame || now - lastRecogMs < RECOG_INTERVAL_MS || !videoElement.videoWidth) return;
             lastRecogMs = now; processingFrame = true;
-            grabBlob(async function(blob) {
+            // ảnh ĐỘ NÉT ĐẦY ĐỦ cho nhận diện (ArcFace cần chi tiết mặt)
+            grabScaled(canvas, 0, 0.7, async function(blob) {
                 if (!blob || !isStreaming) { processingFrame = false; return; }
                 let fd = new FormData();
                 fd.append('file', blob, 'f.jpg');

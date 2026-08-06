@@ -53,9 +53,11 @@ _in_room: dict[str, datetime] = {}   # name → thời điểm vào phòng
 #   LẠ   = người lạ hoàn toàn xuất hiện
 # motion ∈ {"Đứng im","Di chuyển"} — trạng thái chuyển động của mặt lúc xảy ra sự kiện.
 _scan_log: list[dict] = []
-# Chống ghi trùng: person → (status, thời điểm ghi/thấy gần nhất). Đứng im liên tục
-# (dù track bị tái tạo) → chỉ ghi 1 lần vì cùng người+trạng thái trong DEDUP_GAP giây.
-_last_ev: dict = {}
+# ĐỨNG IM: theo dõi theo DANH TÍNH (không theo track) → đứng đủ 2s ghi 1 lần, dù track
+# bị tái tạo. key = tên người (hoặc "Người lạ").
+_stable_start:  dict = {}   # key → lúc bắt đầu lượt đứng hiện tại
+_stable_seen:   dict = {}   # key → lần thấy đứng gần nhất
+_stable_logged: set  = set()  # key đã ghi cho lượt đứng hiện tại
 
 def _log_scan(person: str, status: str, motion: str = "Đứng im"):
     _scan_log.append({"dt": datetime.now(), "person": person,
@@ -81,10 +83,11 @@ _tracks = []   # mỗi track: {'cx','cy','hist':deque((name,score)), 'miss':int,
 
 HYSTERESIS  = 0.04    # đã nhận tên → hạ ngưỡng 0.04 để giữ (khó rớt sang "lạ")
 MIN_PRESENCE = 0.5    # danh tính phải xuất hiện >= 50% cửa sổ mới được nhận
-MATCH_FRAC  = 0.18    # ngưỡng ghép track = 18% đường chéo khung (nới để bám khi di chuyển)
-MOVE_STEP_FRAC = 0.15 # bước dịch TRUNG BÌNH/frame > 15% bề rộng mặt → DI CHUYỂN
-DEDUP_GAP   = 4.0     # giây: cùng người + cùng trạng thái trong khoảng này → gộp làm 1
-STRANGER_MIN = 4      # track phải "lạ" liên tục >= 4 frame mới ghi Người lạ (bớt nhầm)
+MATCH_FRAC  = 0.18     # ngưỡng ghép track = 18% đường chéo khung (nới để bám khi di chuyển)
+MOVE_STEP_FRAC = 0.15  # bước dịch TRUNG BÌNH/frame > 15% bề rộng mặt → DI CHUYỂN
+STABLE_SECONDS = 2.0   # đứng im đủ 2 giây → ghi log 1 lần
+STABLE_GAP  = 1.5      # gián đoạn thấy > 1.5s → coi là lượt đứng MỚI (ghi lại)
+STRANGER_MIN = 4       # phải "lạ" liên tục >= 4 frame mới ghi Người lạ (bớt nhầm)
 
 def _is_moving(pos, wsize):
     """pos: deque (cx,cy). Dùng BƯỚC DỊCH TRUNG BÌNH mỗi frame (ổn định hơn đỉnh):
@@ -119,7 +122,8 @@ def smooth_labels(faces, W, H, threshold):
         if bt is None:
             t = {"cx": cx, "cy": cy, "hist": deque(maxlen=SMOOTH_WINDOW),
                  "miss": 0, "label": "LẠ", "logged_label": "",
-                 "pos": deque(maxlen=SMOOTH_WINDOW), "moving": False}
+                 "pos": deque(maxlen=SMOOTH_WINDOW), "moving": False,
+                 "ever_known": False}
             _tracks.append(t); used.add(len(_tracks) - 1)
         else:
             t = _tracks[bt]
@@ -154,38 +158,43 @@ def smooth_labels(faces, W, H, threshold):
         out.append((t["label"], round(disp, 3)))
 
         # ── GHI NHẬT KÝ QUÉT ──
-        # ĐỨNG IM: 1 người → 1 lần (chống trùng theo person + DEDUP_GAP, kể cả track tái tạo).
-        # DI CHUYỂN: ghi OK/FAIL mỗi lần chuyển trạng thái (son→lạ→son…).
+        #  ĐỨNG IM  : một danh tính đứng đủ STABLE_SECONDS → ghi 1 lần; lặp lại thì BỎ QUA.
+        #  DI CHUYỂN: ghi OK/FAIL mỗi lần chuyển trạng thái (son→lạ→son…).
         now = datetime.now()
         old = t.get("logged_label", "")
-        new = t["label"]
-        if new != old:
-            ev = None
-            if new != "LẠ" and len(t["hist"]) >= 3:
-                ev = (new, "OK")                 # nhận ra người quen (đủ mẫu để biết đứng/đi)
-            elif new == "LẠ" and old not in ("", "LẠ"):
-                ev = (old, "FAIL")               # đang là người quen → hỏng thành lạ
-            elif new == "LẠ" and old in ("", "LẠ") and len(t["hist"]) >= STRANGER_MIN:
-                ev = ("Người lạ", "LẠ")          # người lạ thật (lạ liên tục đủ lâu)
-            if ev is not None:
-                t["logged_label"] = new          # đã "tiêu thụ" chuyển trạng thái
-                person, status = ev
-                allow = True
-                if status == "FAIL" and not t["moving"]:
-                    allow = False                # đứng im: không ghi FAIL (chỉ 1 dòng OK)
-                last = _last_ev.get(person)
-                if last and last[0] == status and (now - last[1]).total_seconds() < DEDUP_GAP:
-                    allow = False                # cùng người+trạng thái vừa ghi → gộp
-                if allow:
-                    _log_scan(person, status, motion)
-                    _last_ev[person] = (status, now)
+        lbl = t["label"]
+        if lbl != "LẠ":
+            t["ever_known"] = True               # track này đã từng là người quen
+        key = lbl if lbl != "LẠ" else "Người lạ"
 
-        # giữ "sự hiện diện": CHỈ gia hạn khi còn TRONG cửa sổ (đang hiện diện liên tục).
-        # Nếu đã vắng > DEDUP_GAP thì KHÔNG gia hạn → lần OK kế tiếp mới được ghi.
-        pres_key = new if new != "LẠ" else "Người lạ"
-        le = _last_ev.get(pres_key)
-        if le is not None and (now - le[1]).total_seconds() < DEDUP_GAP:
-            _last_ev[pres_key] = (le[0], now)
+        if t["moving"]:
+            # ── DI CHUYỂN: ghi theo chuyển trạng thái (so với nhãn ĐÃ GHI gần nhất) ──
+            if lbl != old:
+                if lbl != "LẠ" and len(t["hist"]) >= 3:
+                    _log_scan(lbl, "OK", "Di chuyển");        t["logged_label"] = lbl
+                elif lbl == "LẠ" and old not in ("", "LẠ"):
+                    _log_scan(old, "FAIL", "Di chuyển");       t["logged_label"] = lbl
+                elif lbl == "LẠ" and not t["ever_known"] and len(t["hist"]) >= STRANGER_MIN:
+                    _log_scan("Người lạ", "LẠ", "Di chuyển");  t["logged_label"] = lbl
+            # đang di chuyển → reset đồng hồ đứng im của danh tính này
+            _stable_start.pop(key, None); _stable_seen.pop(key, None)
+            _stable_logged.discard(key)
+        else:
+            # ── ĐỨNG IM: đủ STABLE_SECONDS → ghi 1 lần ──
+            ok_stable = (lbl != "LẠ" and len(t["hist"]) >= 3)
+            la_stable = (lbl == "LẠ" and not t["ever_known"] and len(t["hist"]) >= STRANGER_MIN)
+            if ok_stable or la_stable:
+                prev = _stable_seen.get(key)
+                if prev is None or (now - prev).total_seconds() > STABLE_GAP:
+                    _stable_start[key] = now          # bắt đầu lượt đứng mới
+                    _stable_logged.discard(key)
+                _stable_seen[key] = now
+                if (now - _stable_start[key]).total_seconds() >= STABLE_SECONDS \
+                        and key not in _stable_logged:
+                    _log_scan(key, "LẠ" if key == "Người lạ" else "OK", "Đứng im")
+                    _stable_logged.add(key)
+                    t["logged_label"] = lbl   # đã ghi → di chuyển sau này không ghi lại OK dư
+        # KHÔNG cập nhật logged_label mỗi frame (chỉ cập nhật khi thực sự ghi ở trên)
 
     for ti, t in enumerate(_tracks):   # track không thấy frame này → tăng miss
         if ti not in used:
