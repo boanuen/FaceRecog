@@ -121,9 +121,11 @@
     <div class="layout">
         <!-- CỘT TRÁI: video + điều khiển -->
         <div class="left">
-            <div class="display-box">
-                <img id="video-stream" src="" alt="Webcam Stream" style="display:none;">
-                <video id="webcam-hidden" autoplay playsinline style="display:none;"></video>
+            <div class="display-box" style="position:relative;">
+                <video id="webcam-hidden" autoplay playsinline muted
+                       style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;display:none;"></video>
+                <canvas id="overlay"
+                        style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;pointer-events:none;"></canvas>
                 <p id="placeholder-text" style="color:#64748b;">Đang kết nối Camera...</p>
             </div>
             <div class="controls">
@@ -204,7 +206,8 @@
 
     <script>
         let videoElement = document.getElementById('webcam-hidden');
-        let streamImage  = document.getElementById('video-stream');
+        let overlay      = document.getElementById('overlay');
+        let overlayCtx   = overlay.getContext('2d');
         let placeholder  = document.getElementById('placeholder-text');
         let statusTag    = document.getElementById('status-tag');
         let recogBox     = document.getElementById('recog');
@@ -260,11 +263,13 @@
                 mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
                 videoElement.srcObject = mediaStream;
                 isStreaming = true;
-                streamImage.style.display = 'block';
+                videoElement.style.display = 'block';
                 placeholder.style.display = 'none';
                 setStatus("Camera đang chạy...", "#166534", "#4ade80");
                 frameTimes = [];
-                sendFramesLoop();
+                latestDets = [];
+                sendFramesLoop();   // gửi frame đi detect (throttle)
+                drawOverlayLoop();  // vẽ khung lên overlay mỗi frame (mượt, không nhấp nháy)
             } catch (err) {
                 setStatus("Lỗi cấp quyền Cam!", "#991b1b", "#f87171");
                 alert("Lỗi mở Cam: " + err.message + "\nHãy kiểm tra biểu tượng Camera trên thanh địa chỉ đã chọn Allow chưa!");
@@ -280,7 +285,9 @@
 
         function stopCamera() {
             stopCameraTracks();
-            streamImage.style.display = 'none';
+            videoElement.style.display = 'none';
+            latestDets = [];
+            overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
             placeholder.innerText = "Camera đã tắt";
             placeholder.style.display = 'block';
             setStatus("Camera đã tắt", "#991b1b", "#f87171");
@@ -472,44 +479,35 @@
             }, 'image/jpeg', 0.92);
         }
 
+        // ── KIẾN TRÚC OVERLAY ──────────────────────────────────────────────
+        //  • <video> hiển thị TRỰC TIẾP → mượt, GPU tăng tốc, không re-encode.
+        //  • drawOverlayLoop() vẽ khung lên <canvas> mỗi frame từ latestDets
+        //    → khung ĐỨNG YÊN giữa các lần detect (không nhấp nháy).
+        //  • sendFramesLoop() chỉ gửi ảnh đi detect (throttle), KHÔNG đụng hiển thị.
         let processingFrame = false;
-        let frameBuffer = null;
-        let frameSkipCounter = 0;
-        const SKIP_FRAMES = 2;  // detect mỗi 2 frame (1 detect, 1 skip)
+        let latestDets = [];        // detections mới nhất từ server (giữ giữa các lần detect)
+        let detImgW = 640, detImgH = 480;   // kích thước frame đã gửi detect
+        let lastSendMs = 0;
+        const DETECT_INTERVAL_MS = 120;     // gửi detect tối đa ~8 lần/giây (đủ mượt, đỡ tải)
 
+        // Vòng GỬI DETECT — độc lập với hiển thị
         async function sendFramesLoop() {
             if (!isStreaming) return;
-            canvas.width  = videoElement.videoWidth  || 640;
-            canvas.height = videoElement.videoHeight || 480;
-            let ctx = canvas.getContext('2d');
-            ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-
-            // 🔴 REALTIME: Hiển thị frame gốc ngay lập tức (không chờ detect)
-            canvas.toBlob(function(blob) {
-                if (blob) {
-                    frameBuffer = blob;
-                    streamImage.src = URL.createObjectURL(blob);
-                }
-            }, 'image/jpeg', 0.75);  // quality thấp hơn cho nhanh
-
-            // FPS tính realtime
             let now = performance.now();
-            frameTimes.push(now);
-            while (frameTimes.length && now - frameTimes[0] > 1000) frameTimes.shift();
-
-            // 🟢 BACKGROUND: Frame Skipping - detect 1 lần mỗi SKIP_FRAMES
-            frameSkipCounter++;
-            if (!processingFrame && frameBuffer && frameSkipCounter % SKIP_FRAMES === 0) {
+            if (!processingFrame && now - lastSendMs >= DETECT_INTERVAL_MS
+                && videoElement.videoWidth) {
+                lastSendMs = now;
                 processingFrame = true;
-                sendDetectionAsync(frameBuffer);
+                let vw = videoElement.videoWidth, vh = videoElement.videoHeight;
+                canvas.width = vw; canvas.height = vh;
+                canvas.getContext('2d').drawImage(videoElement, 0, 0, vw, vh);
+                canvas.toBlob(sendDetectionAsync, 'image/jpeg', 0.7);
             }
-
-            // Loop ngay, không chờ response
-            if (isStreaming) requestAnimationFrame(sendFramesLoop);
+            requestAnimationFrame(sendFramesLoop);
         }
 
         async function sendDetectionAsync(blob) {
-            if (!blob || !isStreaming) return;
+            if (!blob || !isStreaming) { processingFrame = false; return; }
             let fd = new FormData();
             fd.append('file', blob, 'frame.jpg');
             fd.append('conf_known', ckSlider.value);
@@ -517,15 +515,13 @@
             try {
                 let res = await fetch('/process-frame', { method: 'POST', body: fd });
                 let data = await res.json();
+                latestDets = data.detections || [];
+                detImgW = data.img_w || 640;
+                detImgH = data.img_h || 480;
 
-                // Cập nhật ảnh annotate (chỉ khi detect xong)
-                if (data.image) streamImage.src = data.image;
-
-                // Cập nhật panel từ từ (mỗi RENDER_MS)
                 let now = performance.now();
                 if (now - lastRender >= RENDER_MS) {
                     renderResults(data);
-                    stFps.innerText = frameTimes.length;
                     lastRender = now;
                 }
             } catch (e) {
@@ -533,6 +529,48 @@
             } finally {
                 processingFrame = false;
             }
+        }
+
+        // Vòng VẼ OVERLAY — chạy mỗi frame màn hình (~60fps), khung luôn mượt
+        function drawOverlayLoop() {
+            if (!isStreaming) return;
+            const vw = videoElement.videoWidth || 640;
+            const vh = videoElement.videoHeight || 480;
+            if (overlay.width !== vw)  overlay.width  = vw;   // canvas cùng độ phân giải video
+            if (overlay.height !== vh) overlay.height = vh;
+
+            overlayCtx.clearRect(0, 0, vw, vh);
+
+            // toạ độ khung do server trả theo kích thước frame đã gửi → scale về video hiện tại
+            const sx = vw / detImgW, sy = vh / detImgH;
+            for (const d of latestDets) {
+                if (!d.box) continue;
+                let [x1, y1, x2, y2] = d.box;
+                x1 *= sx; x2 *= sx; y1 *= sy; y2 *= sy;
+                const col = d.stranger ? '#ef4444' : '#22c55e';
+                const pct = Math.round((d.conf || 0) * 100);
+                const label = d.stranger ? `NGƯỜI LẠ ${pct}%` : `${d.name} ${pct}%`;
+
+                overlayCtx.lineWidth = Math.max(2, vw / 320);
+                overlayCtx.strokeStyle = col;
+                overlayCtx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+                overlayCtx.font = `bold ${Math.max(14, vw / 40)}px 'Segoe UI', sans-serif`;
+                const tw = overlayCtx.measureText(label).width;
+                const th = Math.max(18, vw / 32);
+                overlayCtx.fillStyle = col;
+                overlayCtx.fillRect(x1, y1 - th, tw + 10, th);
+                overlayCtx.fillStyle = '#fff';
+                overlayCtx.fillText(label, x1 + 5, y1 - th * 0.28);
+            }
+
+            // FPS = số frame màn hình đã vẽ trong 1s (mượt thực tế của video)
+            let now = performance.now();
+            frameTimes.push(now);
+            while (frameTimes.length && now - frameTimes[0] > 1000) frameTimes.shift();
+            stFps.innerText = frameTimes.length;
+
+            requestAnimationFrame(drawOverlayLoop);
         }
     </script>
 </body>

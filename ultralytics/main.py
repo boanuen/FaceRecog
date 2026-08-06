@@ -140,41 +140,30 @@ async def process_frame(
     H, W = img.shape[:2]
     voted = smooth_labels(faces, W, H)   # nhãn đã bỏ phiếu theo thời gian ('LẠ' = lạ)
 
-    annotated = img.copy()
     stranger = False
     known = []
     detections = []
 
+    # Chỉ TRẢ TOẠ ĐỘ KHUNG (client tự vẽ overlay lên video) — không encode ảnh
+    # → nhẹ băng thông, không nhấp nháy, detect nhanh hơn (bỏ imencode + base64).
     for f, vname in zip(faces, voted):
         x1, y1, x2, y2 = f["box"]
-        # "#2 <tên> <điểm>" — người đứng nhì, để thấy khoảng cách (càng xa càng chắc)
         runner = f.get("runner")
-        runner_txt = f" | #2 {runner['name']} {runner['score']:.2f}" if runner else ""
+        box = [int(x1), int(y1), int(x2), int(y2)]
         if vname == "LẠ":
-            label = f"NGUOI LA {f['score']:.2f}{runner_txt}"
-            color = (0, 0, 255)      # đỏ — người lạ
             stranger = True
             detections.append({"name": "Người lạ", "conf": f["score"], "stranger": True,
-                               "runner": runner})
+                               "runner": runner, "box": box})
         else:
-            label = f"{vname} {f['score']:.2f}{runner_txt}"
-            color = (0, 200, 0)      # xanh lá — người quen
             known.append(vname)
             detections.append({"name": vname, "conf": f["score"], "stranger": False,
-                               "runner": runner})
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
-        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-        cv2.rectangle(annotated, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
-        cv2.putText(annotated, label, (x1 + 2, y1 - 6),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                               "runner": runner, "box": box})
 
-    _, buf = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
-    b64    = base64.b64encode(buf).decode("utf-8")
     known_unique = list(dict.fromkeys(known))   # bỏ trùng, giữ thứ tự
     # sắp xếp: người lạ lên đầu, rồi theo cosine giảm dần
     detections.sort(key=lambda d: (not d["stranger"], -d["conf"]))
     return {
-        "image": f"data:image/jpeg;base64,{b64}",
+        "img_w": W, "img_h": H,   # kích thước frame (client scale toạ độ khung)
         "stranger": stranger,
         "known": known_unique,
         "detections": detections,
