@@ -99,6 +99,8 @@ STABLE_GAP  = 4.0      # gián đoạn thấy > 4s → coi là lượt đứng M
                        # trên máy chậm, nếu không đồng hồ đứng im bị reset hoài → không ghi)
 STRANGER_MIN = 4       # phải "lạ" liên tục >= 4 frame mới ghi Người lạ (bớt nhầm)
 TRACK_TTL   = 1.5      # track không thấy > 1.5 giây → xoá (dọn theo THỜI GIAN, độc lập FPS)
+REFRESH_SEC = 3.0      # đã nhận ra người quen → DÙNG LẠI danh tính, chỉ chạy ArcFace lại sau 3s
+                       # (cache danh tính → bỏ phần lớn ArcFace trên CPU khi người đã nhận ra)
 
 def _is_moving(pos, wsize):
     """pos: deque (cx, cy, dt). TỐC ĐỘ theo GIÂY (độc lập FPS) + BỀN với nhiễu:
@@ -123,7 +125,17 @@ def _match_thr():
 def _new_track(cx, cy, now):
     return {"cx": cx, "cy": cy, "hist": deque(maxlen=SMOOTH_WINDOW),
             "seen": now, "label": "LẠ", "logged_label": "",
-            "pos": deque(maxlen=SMOOTH_WINDOW), "moving": False, "ever_known": False}
+            "pos": deque(maxlen=SMOOTH_WINDOW), "moving": False, "ever_known": False,
+            "arc_time": None, "arc_score": 0.5}   # lần ArcFace gần nhất + điểm (cache)
+
+def _nearest_track(cxn, cyn, thr):
+    """Track gần nhất (CHỈ ĐỌC, không chiếm) — để quyết định có cần chạy ArcFace không."""
+    best, bd = None, thr
+    for t in _tracks:
+        d = ((t["cx"] - cxn) ** 2 + (t["cy"] - cyn) ** 2) ** 0.5
+        if d < bd:
+            bd, best = d, t
+    return best
 
 def _match_track_idx(cx, cy, thr, used):
     """Ghép (cx,cy) với track GẦN NHẤT chưa dùng. Trả index hoặc None."""
@@ -271,12 +283,52 @@ async def process_frame(
 
     rec.det_conf = conf_detect
     t0 = time.perf_counter()
-    # chạy nhận diện (nặng, CPU) trong threadpool → không chặn endpoint /track (YOLO nhanh)
     loop = asyncio.get_event_loop()
-    faces = await loop.run_in_executor(executor, lambda: rec.recognize(img, threshold=threshold))
+    H, W = img.shape[:2]
+
+    # ── NHẬN DIỆN CÓ CACHE (tiết kiệm CPU) ─────────────────────────────────
+    # 1) YOLO tìm mọi mặt (nhanh). 2) Mặt nào đã nhận ra chắc & còn hạn → DÙNG LẠI tên,
+    #    KHÔNG chạy ArcFace. 3) ArcFace chỉ chạy cho mặt MỚI / chưa chắc / quá hạn refresh.
+    boxes = await loop.run_in_executor(executor, lambda: rec.detect(img))
+    now_dt = datetime.now()
+    thr_m = _match_thr()
+    faces = [None] * len(boxes)
+    trk_of, need = [], []
+    for i, b in enumerate(boxes):
+        x1, y1, x2, y2 = b[:4]
+        cxn, cyn = (x1 + x2) / 2 / W, (y1 + y2) / 2 / H
+        tr = _nearest_track(cxn, cyn, thr_m)
+        trk_of.append(tr)
+        if (tr is not None and tr["label"] != "LẠ" and tr["arc_time"] is not None
+                and (now_dt - tr["arc_time"]).total_seconds() < REFRESH_SEC):
+            faces[i] = {"box": (x1, y1, x2, y2), "best_name": tr["label"],
+                        "score": tr["arc_score"], "runner": None}   # DÙNG LẠI (bỏ ArcFace)
+        else:
+            need.append(i)
+    if need:
+        need_boxes = [boxes[i][:4] for i in need]
+        emb, keep = await loop.run_in_executor(executor, lambda: rec.embed(img, need_boxes))
+        got = {}
+        for j, k in enumerate(keep):
+            ranked = rec._rank(emb[j])
+            if ranked:
+                runner = ({"name": ranked[1][0], "score": round(ranked[1][1], 3)}
+                          if len(ranked) > 1 else None)
+                got[k] = (ranked[0][0], round(ranked[0][1], 3), runner)
+        for pos, i in enumerate(need):
+            x1, y1, x2, y2 = boxes[i][:4]
+            info = got.get(pos)
+            if info is None:
+                faces[i] = {"box": (x1, y1, x2, y2), "best_name": None, "score": 0.0, "runner": None}
+            else:
+                bn, bs, runner = info
+                faces[i] = {"box": (x1, y1, x2, y2), "best_name": bn, "score": bs, "runner": runner}
+                if trk_of[i] is not None:            # nhớ đã ArcFace → lần sau dùng lại
+                    trk_of[i]["arc_time"] = now_dt
+                    trk_of[i]["arc_score"] = bs
+    faces = [f for f in faces if f is not None]
     infer_ms = (time.perf_counter() - t0) * 1000
 
-    H, W = img.shape[:2]
     n0 = len(_scan_log)
     voted = smooth_labels(faces, W, H, threshold)   # [(label, disp_score)] đã làm mượt
     # sự kiện quét MỚI sinh ra ở frame này → gửi về client hiện live
