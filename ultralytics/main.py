@@ -68,11 +68,10 @@ print(f"[main] Khởi tạo YOLO26 + ArcFace...")
 rec = FaceRecognizer(det_conf=CONF_DETECT)   # YOLO detect mặt, ArcFace nhận diện tên
 
 # ── CHẾ ĐỘ NHẸ: tự bật khi máy KHÔNG có GPU (YOLO chạy CPU) ──
-# CPU thì YOLO/ArcFace chậm → giảm độ phân giải nhận diện + khung để đỡ giật.
+# CPU thì YOLO/ArcFace chậm. Ở đây ƯU TIÊN ĐỘ CHÍNH XÁC: GIỮ NGUYÊN độ phân giải
+# nhận diện (det_imgsz 512) để bớt nhầm; chỉ để khung /track nhẹ (không ảnh hưởng chính xác).
 LIGHT_MODE = (rec.device == "cpu")
-if LIGHT_MODE:
-    rec.det_imgsz = 416          # YOLO nhận diện nhẹ hơn (512 → 416)
-TRACK_IMGSZ = 256 if LIGHT_MODE else 320   # YOLO cho /track (bám khung)
+TRACK_IMGSZ = 256 if LIGHT_MODE else 320   # YOLO cho /track (bám khung, không ảnh hưởng nhận diện)
 
 print(f"[main] Device YOLO : {rec.device}   {'(CHẾ ĐỘ NHẸ - CPU)' if LIGHT_MODE else ''}")
 print(f"[main] DB          : {DB_PATH}  ({len(rec.db_names)} người: {rec.db_names})")

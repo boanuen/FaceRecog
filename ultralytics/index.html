@@ -159,8 +159,8 @@
             <div class="card">
                 <h3>Ngưỡng nhận diện</h3>
                 <div class="slider">
-                    <div class="slider-top"><span>Người quen ≥</span><b id="ck-val">0.35</b></div>
-                    <input type="range" id="ck" min="0.20" max="0.95" step="0.01" value="0.35">
+                    <div class="slider-top"><span>Người quen ≥</span><b id="ck-val">0.30</b></div>
+                    <input type="range" id="ck" min="0.20" max="0.95" step="0.01" value="0.30">
                     <div class="hint">Cao → chắc chắn mới nhận tên (ít nhầm, dễ báo "lạ").</div>
                 </div>
                 <div class="slider">
@@ -547,8 +547,8 @@
             if (processingFrame || now - lastRecogMs < dynRecogInterval || !videoElement.videoWidth) return;
             lastRecogMs = now; processingFrame = true;
             let t0 = now;
-            // ảnh thu nhỏ ≤1280 (cam 2K rất nặng trên CPU) — mặt vẫn đủ nét cho ArcFace
-            grabScaled(canvas, 1280, 0.7, async function(blob) {
+            // ƯU TIÊN CHÍNH XÁC: ảnh nhận diện ≤1920 (mặt nét hơn → ArcFace ít nhầm hơn)
+            grabScaled(canvas, 1920, 0.82, async function(blob) {
                 if (!blob || !isStreaming) { processingFrame = false; return; }
                 let fd = new FormData();
                 fd.append('file', blob, 'f.jpg');
