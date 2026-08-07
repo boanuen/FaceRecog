@@ -202,14 +202,13 @@ def smooth_labels(faces, W, H, threshold):
         key = lbl if lbl != "LẠ" else "Người lạ"
 
         if t["moving"]:
-            # ── DI CHUYỂN: ghi theo chuyển trạng thái (so với nhãn ĐÃ GHI gần nhất) ──
-            if lbl != old:
-                if lbl != "LẠ" and len(t["hist"]) >= 1:
-                    _log_scan(lbl, "OK", "Di chuyển");        t["logged_label"] = lbl
-                elif lbl == "LẠ" and old not in ("", "LẠ"):
-                    _log_scan(old, "FAIL", "Di chuyển");       t["logged_label"] = lbl
-                elif lbl == "LẠ" and not t["ever_known"] and len(t["hist"]) >= STRANGER_MIN:
-                    _log_scan("Người lạ", "LẠ", "Di chuyển");  t["logged_label"] = lbl
+            # ── DI CHUYỂN: ghi MỖI frame nhận diện (đi qua thì ghi nhiều), fail khi hỏng ──
+            if lbl != "LẠ" and len(t["hist"]) >= 1:
+                _log_scan(lbl, "OK", "Di chuyển"); t["logged_label"] = lbl   # nhận ra → OK
+            elif lbl == "LẠ" and old not in ("", "LẠ"):
+                _log_scan(old, "FAIL", "Di chuyển"); t["logged_label"] = lbl # người quen → hỏng
+            elif lbl == "LẠ" and old != "LẠ" and not t["ever_known"] and len(t["hist"]) >= STRANGER_MIN:
+                _log_scan("Người lạ", "LẠ", "Di chuyển"); t["logged_label"] = lbl
             # đang di chuyển → reset đồng hồ đứng im của danh tính này
             _stable_start.pop(key, None); _stable_seen.pop(key, None)
             _stable_logged.discard(key)
