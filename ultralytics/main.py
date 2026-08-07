@@ -94,7 +94,8 @@ MIN_PRESENCE = 0.5    # danh tính phải xuất hiện >= 50% cửa sổ mới 
 MATCH_FRAC  = 0.18     # ngưỡng ghép track = 18% đường chéo khung (nới để bám khi di chuyển)
 MOVE_SPEED_FRAC = 0.6  # TỐC ĐỘ tâm mặt > 60% bề rộng mặt / GIÂY → DI CHUYỂN (độc lập FPS)
 STABLE_SECONDS = 2.0   # đứng im đủ 2 giây → ghi log 1 lần
-STABLE_GAP  = 1.5      # gián đoạn thấy > 1.5s → coi là lượt đứng MỚI (ghi lại)
+STABLE_GAP  = 4.0      # gián đoạn thấy > 4s → coi là lượt đứng MỚI (phải > nhịp nhận diện
+                       # trên máy chậm, nếu không đồng hồ đứng im bị reset hoài → không ghi)
 STRANGER_MIN = 4       # phải "lạ" liên tục >= 4 frame mới ghi Người lạ (bớt nhầm)
 
 def _is_moving(pos, wsize):
@@ -181,7 +182,7 @@ def smooth_labels(faces, W, H, threshold):
         if t["moving"]:
             # ── DI CHUYỂN: ghi theo chuyển trạng thái (so với nhãn ĐÃ GHI gần nhất) ──
             if lbl != old:
-                if lbl != "LẠ" and len(t["hist"]) >= 3:
+                if lbl != "LẠ" and len(t["hist"]) >= 2:
                     _log_scan(lbl, "OK", "Di chuyển");        t["logged_label"] = lbl
                 elif lbl == "LẠ" and old not in ("", "LẠ"):
                     _log_scan(old, "FAIL", "Di chuyển");       t["logged_label"] = lbl
@@ -192,7 +193,7 @@ def smooth_labels(faces, W, H, threshold):
             _stable_logged.discard(key)
         else:
             # ── ĐỨNG IM: đủ STABLE_SECONDS → ghi 1 lần ──
-            ok_stable = (lbl != "LẠ" and len(t["hist"]) >= 3)
+            ok_stable = (lbl != "LẠ" and len(t["hist"]) >= 2)
             la_stable = (lbl == "LẠ" and not t["ever_known"] and len(t["hist"]) >= STRANGER_MIN)
             if ok_stable or la_stable:
                 prev = _stable_seen.get(key)
