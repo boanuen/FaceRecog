@@ -87,7 +87,7 @@ print("[main] Warm-up done")
 # Mỗi mặt được ghép với 1 track theo vị trí. Track giữ lịch sử (tên, điểm) vài frame.
 # Quyết định dựa trên ĐIỂM TRUNG BÌNH của danh tính nổi trội trong cửa sổ + HYSTERESIS
 # (đã nhận là ai thì bám lấy, một frame điểm thấp KHÔNG lật ngay sang "lạ").
-_tracks = []   # mỗi track: {'cx','cy','hist':deque((name,score)), 'miss':int, 'label':str}
+_tracks = []   # mỗi track: {'cx','cy','hist':deque((name,score)), 'seen':datetime, 'label':str,...}
 
 HYSTERESIS  = 0.04    # đã nhận tên → hạ ngưỡng 0.04 để giữ (khó rớt sang "lạ")
 MIN_PRESENCE = 0.5    # danh tính phải xuất hiện >= 50% cửa sổ mới được nhận
@@ -97,25 +97,30 @@ STABLE_SECONDS = 2.0   # đứng im đủ 2 giây → ghi log 1 lần
 STABLE_GAP  = 4.0      # gián đoạn thấy > 4s → coi là lượt đứng MỚI (phải > nhịp nhận diện
                        # trên máy chậm, nếu không đồng hồ đứng im bị reset hoài → không ghi)
 STRANGER_MIN = 4       # phải "lạ" liên tục >= 4 frame mới ghi Người lạ (bớt nhầm)
+TRACK_TTL   = 1.5      # track không thấy > 1.5 giây → xoá (dọn theo THỜI GIAN, độc lập FPS)
 
 def _is_moving(pos, wsize):
-    """pos: deque (cx, cy, dt) với dt = datetime. Dùng TỐC ĐỘ (px/giây) chuẩn hoá theo
-    bề rộng mặt → KHÔNG phụ thuộc FPS: máy nhanh hay chậm đều phân biệt đứng/đi như nhau."""
-    if len(pos) < 2 or wsize <= 0:
+    """pos: deque (cx, cy, dt). TỐC ĐỘ theo GIÂY (độc lập FPS) + BỀN với nhiễu:
+    so vị trí TRUNG BÌNH nửa đầu vs nửa sau cửa sổ (1 điểm nhiễu bị trung bình hoá,
+    không làm đứng im thành di chuyển)."""
+    if len(pos) < 3 or wsize <= 0:
         return False
-    dt = (pos[-1][2] - pos[0][2]).total_seconds()
-    if dt < 0.15:                       # chưa đủ thời gian để ước lượng tốc độ
+    h = len(pos) // 2
+    first, last = list(pos)[:h], list(pos)[-h:]
+    fx = sum(p[0] for p in first) / h; fy = sum(p[1] for p in first) / h
+    lx = sum(p[0] for p in last) / h;  ly = sum(p[1] for p in last) / h
+    dt = (last[-1][2] - first[0][2]).total_seconds()
+    if dt < 0.15:
         return False
-    xs = [p[0] for p in pos]; ys = [p[1] for p in pos]
-    span = ((max(xs) - min(xs)) ** 2 + (max(ys) - min(ys)) ** 2) ** 0.5
-    return (span / dt) > MOVE_SPEED_FRAC * wsize
+    disp = ((lx - fx) ** 2 + (ly - fy) ** 2) ** 0.5
+    return (disp / dt) > MOVE_SPEED_FRAC * wsize
 
 def _match_thr(W, H):
     return MATCH_FRAC * (W * W + H * H) ** 0.5
 
-def _new_track(cx, cy):
+def _new_track(cx, cy, now):
     return {"cx": cx, "cy": cy, "hist": deque(maxlen=SMOOTH_WINDOW),
-            "miss": 0, "label": "LẠ", "logged_label": "",
+            "seen": now, "label": "LẠ", "logged_label": "",
             "pos": deque(maxlen=SMOOTH_WINDOW), "moving": False, "ever_known": False}
 
 def _match_track_idx(cx, cy, thr, used):
@@ -129,11 +134,19 @@ def _match_track_idx(cx, cy, thr, used):
             bd, bt = d, ti
     return bt
 
+def _prune_tracks(now):
+    """Dọn track theo THỜI GIAN (độc lập FPS): track không thấy > TRACK_TTL giây → bỏ.
+    Tránh track cũ tồn đọng gây ghép nhầm → nhầm người lạ."""
+    global _tracks
+    _tracks = [t for t in _tracks if (now - t["seen"]).total_seconds() <= TRACK_TTL]
+
 def smooth_labels(faces, W, H, threshold):
     """faces: list {box, best_name, score, ...}. Trả list (label, disp_score) đã làm mượt.
     label = tên hoặc 'LẠ'. disp_score = điểm trung bình (ổn định, đỡ nhảy %)."""
     global _tracks
     thr = _match_thr(W, H)
+    now = datetime.now()
+    _prune_tracks(now)   # dọn track cũ TRƯỚC khi ghép → không hồi sinh track tồn đọng
     used, out = set(), []
     for f in faces:
         x1, y1, x2, y2 = f["box"]
@@ -142,19 +155,17 @@ def smooth_labels(faces, W, H, threshold):
 
         bt = _match_track_idx(cx, cy, thr, used)
         if bt is None:
-            t = _new_track(cx, cy)
+            t = _new_track(cx, cy, now)
             _tracks.append(t); used.add(len(_tracks) - 1)
         else:
             t = _tracks[bt]
-            t["cx"], t["cy"], t["miss"] = cx, cy, 0
+            t["cx"], t["cy"], t["seen"] = cx, cy, now
             used.add(bt)
         t["hist"].append((bn, bs))
 
         # ── ĐO CHUYỂN ĐỘNG (theo TỐC ĐỘ, độc lập FPS): đứng im hay di chuyển ──
-        now = datetime.now()
         t["pos"].append((cx, cy, now))
         t["moving"] = _is_moving(t["pos"], x2 - x1)
-        motion = "Di chuyển" if t["moving"] else "Đứng im"
 
         # gộp điểm theo từng tên trong cửa sổ → chọn danh tính nổi trội
         by = defaultdict(list)
@@ -189,7 +200,7 @@ def smooth_labels(faces, W, H, threshold):
         if t["moving"]:
             # ── DI CHUYỂN: ghi theo chuyển trạng thái (so với nhãn ĐÃ GHI gần nhất) ──
             if lbl != old:
-                if lbl != "LẠ" and len(t["hist"]) >= 2:
+                if lbl != "LẠ" and len(t["hist"]) >= 1:
                     _log_scan(lbl, "OK", "Di chuyển");        t["logged_label"] = lbl
                 elif lbl == "LẠ" and old not in ("", "LẠ"):
                     _log_scan(old, "FAIL", "Di chuyển");       t["logged_label"] = lbl
@@ -215,10 +226,6 @@ def smooth_labels(faces, W, H, threshold):
                     t["logged_label"] = lbl   # đã ghi → di chuyển sau này không ghi lại OK dư
         # KHÔNG cập nhật logged_label mỗi frame (chỉ cập nhật khi thực sự ghi ở trên)
 
-    for ti, t in enumerate(_tracks):   # track không thấy frame này → tăng miss
-        if ti not in used:
-            t["miss"] += 1
-    _tracks = [t for t in _tracks if t["miss"] <= 8]   # giữ track lâu hơn (mất <=8 frame)
     return out
 
 @app.get("/", response_class=HTMLResponse)
@@ -329,6 +336,7 @@ async def track_faces(
     H, W = img.shape[:2]
     match_thr = _match_thr(W, H)
     now = datetime.now()
+    _prune_tracks(now)   # dọn track cũ TRƯỚC khi ghép
     used, dets = set(), []
     for (x1, y1, x2, y2, conf) in boxes:
         cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
@@ -336,11 +344,11 @@ async def track_faces(
         if bi is None:
             # /track TẠO track mới (nhanh, 3-5fps) → chờ /process-frame gán tên.
             # Nhờ vậy track sẵn lịch sử vị trí → người di chuyển ghi được ngay khi nhận ra.
-            t = _new_track(cx, cy)
+            t = _new_track(cx, cy, now)
             _tracks.append(t); bi = len(_tracks) - 1
         else:
             t = _tracks[bi]
-            t["cx"], t["cy"], t["miss"] = cx, cy, 0
+            t["cx"], t["cy"], t["seen"] = cx, cy, now
         used.add(bi)
         # GÓP dữ liệu chuyển động ở nhịp nhanh của /track → đo đứng/đi chính xác
         t["pos"].append((cx, cy, now))
