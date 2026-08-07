@@ -66,7 +66,15 @@ def _log_scan(person: str, status: str, motion: str = "Đứng im"):
 
 print(f"[main] Khởi tạo YOLO26 + ArcFace...")
 rec = FaceRecognizer(det_conf=CONF_DETECT)   # YOLO detect mặt, ArcFace nhận diện tên
-print(f"[main] Device YOLO : {rec.device}")
+
+# ── CHẾ ĐỘ NHẸ: tự bật khi máy KHÔNG có GPU (YOLO chạy CPU) ──
+# CPU thì YOLO/ArcFace chậm → giảm độ phân giải nhận diện + khung để đỡ giật.
+LIGHT_MODE = (rec.device == "cpu")
+if LIGHT_MODE:
+    rec.det_imgsz = 416          # YOLO nhận diện nhẹ hơn (512 → 416)
+TRACK_IMGSZ = 256 if LIGHT_MODE else 320   # YOLO cho /track (bám khung)
+
+print(f"[main] Device YOLO : {rec.device}   {'(CHẾ ĐỘ NHẸ - CPU)' if LIGHT_MODE else ''}")
 print(f"[main] DB          : {DB_PATH}  ({len(rec.db_names)} người: {rec.db_names})")
 print(f"[main] Ngưỡng      : detect={CONF_DETECT}  cosine={THRESHOLD}")
 
@@ -218,6 +226,7 @@ def health():
         "status": "ok",
         "arch": "YOLO26 detect + ArcFace embedding",
         "device": rec.device,
+        "light_mode": LIGHT_MODE,
         "people": rec.db_names,
         "db_size": 0 if rec.db_embs is None else int(rec.db_embs.shape[0]),
         "threshold": THRESHOLD,
@@ -306,8 +315,8 @@ async def track_faces(
 
     rec.det_conf = min(max(conf_detect, 0.05), 0.9)
     loop = asyncio.get_event_loop()
-    # YOLO ở imgsz nhỏ (320) → nhanh hơn nhiều trên CPU → khung bám sát ngay cả máy yếu
-    boxes = await loop.run_in_executor(executor, lambda: rec.detect(img, imgsz=320))
+    # YOLO ở imgsz nhỏ → nhanh hơn nhiều trên CPU → khung bám sát ngay cả máy yếu
+    boxes = await loop.run_in_executor(executor, lambda: rec.detect(img, imgsz=TRACK_IMGSZ))
 
     H, W = img.shape[:2]
     match_thr = _match_thr(W, H)

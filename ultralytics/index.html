@@ -537,15 +537,18 @@
             });
         }
 
-        // VÒNG NHẬN DIỆN TÊN — ArcFace, gọi thưa (danh tính không đổi nhanh)
+        // VÒNG NHẬN DIỆN TÊN — ArcFace, gọi thưa (danh tính không đổi nhanh).
+        // Tự GIÃN NHỊP theo độ trễ thực: máy chậm → nhận diện thưa hơn → nhường CPU cho khung.
+        let dynRecogInterval = RECOG_INTERVAL_MS;
         function recogLoop() {
             if (!isStreaming) return;
             requestAnimationFrame(recogLoop);
             let now = performance.now();
-            if (processingFrame || now - lastRecogMs < RECOG_INTERVAL_MS || !videoElement.videoWidth) return;
+            if (processingFrame || now - lastRecogMs < dynRecogInterval || !videoElement.videoWidth) return;
             lastRecogMs = now; processingFrame = true;
-            // ảnh ĐỘ NÉT ĐẦY ĐỦ cho nhận diện (ArcFace cần chi tiết mặt)
-            grabScaled(canvas, 0, 0.7, async function(blob) {
+            let t0 = now;
+            // ảnh thu nhỏ ≤1280 (cam 2K rất nặng trên CPU) — mặt vẫn đủ nét cho ArcFace
+            grabScaled(canvas, 1280, 0.7, async function(blob) {
                 if (!blob || !isStreaming) { processingFrame = false; return; }
                 let fd = new FormData();
                 fd.append('file', blob, 'f.jpg');
@@ -553,12 +556,13 @@
                 fd.append('conf_detect', cdSlider.value);
                 try {
                     let data = await (await fetch('/process-frame', { method: 'POST', body: fd })).json();
-                    // sự kiện quét OK/FAIL/LẠ → ghi ngay vào nhật ký UI (không throttle)
-                    (data.scan_events || []).forEach(addScanLog);
+                    (data.scan_events || []).forEach(addScanLog);   // ghi nhật ký UI ngay
                     let t = performance.now();
+                    // giãn nhịp: lần sau chờ >= 1.8× thời gian nhận diện vừa rồi (tối thiểu mặc định)
+                    dynRecogInterval = Math.max(RECOG_INTERVAL_MS, (t - t0) * 1.8);
                     if (t - lastRender >= RENDER_MS) { renderResults(data); lastRender = t; }
                 } catch (e) { /* silent */ } finally { processingFrame = false; }
-            }, 0.7);
+            });
         }
 
         // VÒNG VẼ KHUNG — tô latestBoxes lên overlay
