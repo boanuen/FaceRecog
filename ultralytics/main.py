@@ -68,9 +68,11 @@ print(f"[main] Khởi tạo YOLO26 + ArcFace...")
 rec = FaceRecognizer(det_conf=CONF_DETECT)   # YOLO detect mặt, ArcFace nhận diện tên
 
 # ── CHẾ ĐỘ NHẸ: tự bật khi máy KHÔNG có GPU (YOLO chạy CPU) ──
-# CPU thì YOLO/ArcFace chậm. Ở đây ƯU TIÊN ĐỘ CHÍNH XÁC: GIỮ NGUYÊN độ phân giải
-# nhận diện (det_imgsz 512) để bớt nhầm; chỉ để khung /track nhẹ (không ảnh hưởng chính xác).
+# CPU thì YOLO/ArcFace chậm. YOLO chỉ TÌM VỊ TRÍ mặt (ArcFace tự cắt+căn lại từ ảnh gốc 1920),
+# nên hạ imgsz YOLO 512→416 giúp NHANH mà KHÔNG giảm độ chính xác nhận dạng.
 LIGHT_MODE = (rec.device == "cpu")
+if LIGHT_MODE:
+    rec.det_imgsz = 416
 TRACK_IMGSZ = 256 if LIGHT_MODE else 320   # YOLO cho /track (bám khung, không ảnh hưởng nhận diện)
 
 print(f"[main] Device YOLO : {rec.device}   {'(CHẾ ĐỘ NHẸ - CPU)' if LIGHT_MODE else ''}")
@@ -114,8 +116,9 @@ def _is_moving(pos, wsize):
     disp = ((lx - fx) ** 2 + (ly - fy) ** 2) ** 0.5
     return (disp / dt) > MOVE_SPEED_FRAC * wsize
 
-def _match_thr(W, H):
-    return MATCH_FRAC * (W * W + H * H) ** 0.5
+def _match_thr():
+    # ngưỡng ghép trong hệ toạ độ CHUẨN HOÁ [0,1] (đường chéo = √2)
+    return MATCH_FRAC * (2 ** 0.5)
 
 def _new_track(cx, cy, now):
     return {"cx": cx, "cy": cy, "hist": deque(maxlen=SMOOTH_WINDOW),
@@ -143,28 +146,30 @@ def smooth_labels(faces, W, H, threshold):
     """faces: list {box, best_name, score, ...}. Trả list (label, disp_score) đã làm mượt.
     label = tên hoặc 'LẠ'. disp_score = điểm trung bình (ổn định, đỡ nhảy %)."""
     global _tracks
-    thr = _match_thr(W, H)
+    thr = _match_thr()
     now = datetime.now()
     _prune_tracks(now)   # dọn track cũ TRƯỚC khi ghép → không hồi sinh track tồn đọng
     used, out = set(), []
     for f in faces:
         x1, y1, x2, y2 = f["box"]
-        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        # TOẠ ĐỘ CHUẨN HOÁ [0,1] → độc lập độ phân giải ảnh (chung hệ với /track)
+        cxn, cyn = (x1 + x2) / 2 / W, (y1 + y2) / 2 / H
+        wsn = (x2 - x1) / W
         bn, bs = f.get("best_name"), float(f.get("score", 0.0))
 
-        bt = _match_track_idx(cx, cy, thr, used)
+        bt = _match_track_idx(cxn, cyn, thr, used)
         if bt is None:
-            t = _new_track(cx, cy, now)
+            t = _new_track(cxn, cyn, now)
             _tracks.append(t); used.add(len(_tracks) - 1)
         else:
             t = _tracks[bt]
-            t["cx"], t["cy"], t["seen"] = cx, cy, now
+            t["cx"], t["cy"], t["seen"] = cxn, cyn, now
             used.add(bt)
         t["hist"].append((bn, bs))
 
         # ── ĐO CHUYỂN ĐỘNG (theo TỐC ĐỘ, độc lập FPS): đứng im hay di chuyển ──
-        t["pos"].append((cx, cy, now))
-        t["moving"] = _is_moving(t["pos"], x2 - x1)
+        t["pos"].append((cxn, cyn, now))
+        t["moving"] = _is_moving(t["pos"], wsn)
 
         # gộp điểm theo từng tên trong cửa sổ → chọn danh tính nổi trội
         by = defaultdict(list)
@@ -333,25 +338,27 @@ async def track_faces(
     boxes = await loop.run_in_executor(executor, lambda: rec.detect(img, imgsz=TRACK_IMGSZ))
 
     H, W = img.shape[:2]
-    match_thr = _match_thr(W, H)
+    match_thr = _match_thr()
     now = datetime.now()
     _prune_tracks(now)   # dọn track cũ TRƯỚC khi ghép
     used, dets = set(), []
     for (x1, y1, x2, y2, conf) in boxes:
-        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-        bi = _match_track_idx(cx, cy, match_thr, used)
+        # TOẠ ĐỘ CHUẨN HOÁ [0,1] → CHUNG hệ với /process-frame (dù ảnh khác độ phân giải)
+        cxn, cyn = (x1 + x2) / 2 / W, (y1 + y2) / 2 / H
+        wsn = (x2 - x1) / W
+        bi = _match_track_idx(cxn, cyn, match_thr, used)
         if bi is None:
             # /track TẠO track mới (nhanh, 3-5fps) → chờ /process-frame gán tên.
             # Nhờ vậy track sẵn lịch sử vị trí → người di chuyển ghi được ngay khi nhận ra.
-            t = _new_track(cx, cy, now)
+            t = _new_track(cxn, cyn, now)
             _tracks.append(t); bi = len(_tracks) - 1
         else:
             t = _tracks[bi]
-            t["cx"], t["cy"], t["seen"] = cx, cy, now
+            t["cx"], t["cy"], t["seen"] = cxn, cyn, now
         used.add(bi)
         # GÓP dữ liệu chuyển động ở nhịp nhanh của /track → đo đứng/đi chính xác
-        t["pos"].append((cx, cy, now))
-        t["moving"] = _is_moving(t["pos"], x2 - x1)
+        t["pos"].append((cxn, cyn, now))
+        t["moving"] = _is_moving(t["pos"], wsn)
 
         lab = t["label"]
         if not t["hist"]:                 # chưa nhận diện lần nào → xám "…"
