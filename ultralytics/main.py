@@ -209,24 +209,22 @@ def smooth_labels(faces, W, H, threshold):
                 _log_scan(old, "FAIL", "Di chuyển"); t["logged_label"] = lbl # người quen → hỏng
             elif lbl == "LẠ" and old != "LẠ" and not t["ever_known"] and len(t["hist"]) >= STRANGER_MIN:
                 _log_scan("Người lạ", "LẠ", "Di chuyển"); t["logged_label"] = lbl
-            # đang di chuyển → reset đồng hồ đứng im của danh tính này
+            # đang di chuyển → reset đồng hồ đứng im (nhưng GIỮ cờ đã-ghi: đứng im chỉ ghi 1 lần)
             _stable_start.pop(key, None); _stable_seen.pop(key, None)
-            _stable_logged.discard(key)
         else:
-            # ── ĐỨNG IM: đủ STABLE_SECONDS → ghi 1 lần ──
+            # ── ĐỨNG IM: mỗi người CHỈ ghi 1 lần DUY NHẤT (lần đầu đứng đủ STABLE_SECONDS),
+            #    sau đó bỏ qua mọi lần đứng im khác. Chỉ DI CHUYỂN mới ghi tiếp.
             ok_stable = (lbl != "LẠ" and len(t["hist"]) >= 1)
             la_stable = (lbl == "LẠ" and not t["ever_known"] and len(t["hist"]) >= STRANGER_MIN)
-            if ok_stable or la_stable:
+            if (ok_stable or la_stable) and key not in _stable_logged:
                 prev = _stable_seen.get(key)
                 if prev is None or (now - prev).total_seconds() > STABLE_GAP:
-                    _stable_start[key] = now          # bắt đầu lượt đứng mới
-                    _stable_logged.discard(key)
+                    _stable_start[key] = now          # bắt đầu tính giờ đứng
                 _stable_seen[key] = now
-                if (now - _stable_start[key]).total_seconds() >= STABLE_SECONDS \
-                        and key not in _stable_logged:
+                if (now - _stable_start[key]).total_seconds() >= STABLE_SECONDS:
                     _log_scan(key, "LẠ" if key == "Người lạ" else "OK", "Đứng im")
-                    _stable_logged.add(key)
-                    t["logged_label"] = lbl   # đã ghi → di chuyển sau này không ghi lại OK dư
+                    _stable_logged.add(key)           # đã ghi → KHÔNG bao giờ ghi đứng im lại
+                    t["logged_label"] = lbl
         # KHÔNG cập nhật logged_label mỗi frame (chỉ cập nhật khi thực sự ghi ở trên)
 
     return out
