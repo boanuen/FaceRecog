@@ -113,6 +113,22 @@ def _is_moving(pos, wsize):
 def _match_thr(W, H):
     return MATCH_FRAC * (W * W + H * H) ** 0.5
 
+def _new_track(cx, cy):
+    return {"cx": cx, "cy": cy, "hist": deque(maxlen=SMOOTH_WINDOW),
+            "miss": 0, "label": "LẠ", "logged_label": "",
+            "pos": deque(maxlen=SMOOTH_WINDOW), "moving": False, "ever_known": False}
+
+def _match_track_idx(cx, cy, thr, used):
+    """Ghép (cx,cy) với track GẦN NHẤT chưa dùng. Trả index hoặc None."""
+    bt, bd = None, thr
+    for ti, t in enumerate(_tracks):
+        if ti in used:
+            continue
+        d = ((t["cx"] - cx) ** 2 + (t["cy"] - cy) ** 2) ** 0.5
+        if d < bd:
+            bd, bt = d, ti
+    return bt
+
 def smooth_labels(faces, W, H, threshold):
     """faces: list {box, best_name, score, ...}. Trả list (label, disp_score) đã làm mượt.
     label = tên hoặc 'LẠ'. disp_score = điểm trung bình (ổn định, đỡ nhảy %)."""
@@ -124,18 +140,9 @@ def smooth_labels(faces, W, H, threshold):
         cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
         bn, bs = f.get("best_name"), float(f.get("score", 0.0))
 
-        bt, bd = None, thr
-        for ti, t in enumerate(_tracks):
-            if ti in used:
-                continue
-            dist = ((t["cx"] - cx) ** 2 + (t["cy"] - cy) ** 2) ** 0.5
-            if dist < bd:
-                bd, bt = dist, ti
+        bt = _match_track_idx(cx, cy, thr, used)
         if bt is None:
-            t = {"cx": cx, "cy": cy, "hist": deque(maxlen=SMOOTH_WINDOW),
-                 "miss": 0, "label": "LẠ", "logged_label": "",
-                 "pos": deque(maxlen=SMOOTH_WINDOW), "moving": False,
-                 "ever_known": False}
+            t = _new_track(cx, cy)
             _tracks.append(t); used.add(len(_tracks) - 1)
         else:
             t = _tracks[bt]
@@ -193,7 +200,7 @@ def smooth_labels(faces, W, H, threshold):
             _stable_logged.discard(key)
         else:
             # ── ĐỨNG IM: đủ STABLE_SECONDS → ghi 1 lần ──
-            ok_stable = (lbl != "LẠ" and len(t["hist"]) >= 2)
+            ok_stable = (lbl != "LẠ" and len(t["hist"]) >= 1)
             la_stable = (lbl == "LẠ" and not t["ever_known"] and len(t["hist"]) >= STRANGER_MIN)
             if ok_stable or la_stable:
                 prev = _stable_seen.get(key)
@@ -321,33 +328,33 @@ async def track_faces(
 
     H, W = img.shape[:2]
     match_thr = _match_thr(W, H)
+    now = datetime.now()
     used, dets = set(), []
     for (x1, y1, x2, y2, conf) in boxes:
         cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-        # ghép khung với track gần nhất để lấy nhãn đã nhận diện gần đây
-        best, bi, bd = None, -1, match_thr
-        for ti, t in enumerate(_tracks):
-            if ti in used:
-                continue
-            dist = ((t["cx"] - cx) ** 2 + (t["cy"] - cy) ** 2) ** 0.5
-            if dist < bd:
-                bd, best, bi = dist, t, ti
-        moving = False
-        if best is not None:
-            # GIỮ track sống + cập nhật vị trí ở 5fps → liền mạch khi di chuyển
-            best["cx"], best["cy"], best["miss"] = cx, cy, 0
-            used.add(bi)
-            lab = best.get("label", "LẠ")
-            score = best["hist"][-1][1] if best.get("hist") else 0.0
-            moving = best.get("moving", False)
-            if lab == "LẠ":
-                name, stranger, pending = "Người lạ", True, False
-            else:
-                name, stranger, pending = lab, False, False
+        bi = _match_track_idx(cx, cy, match_thr, used)
+        if bi is None:
+            # /track TẠO track mới (nhanh, 3-5fps) → chờ /process-frame gán tên.
+            # Nhờ vậy track sẵn lịch sử vị trí → người di chuyển ghi được ngay khi nhận ra.
+            t = _new_track(cx, cy)
+            _tracks.append(t); bi = len(_tracks) - 1
         else:
-            name, score, stranger, pending = "…", 0.0, False, True   # chưa nhận diện kịp → xám
+            t = _tracks[bi]
+            t["cx"], t["cy"], t["miss"] = cx, cy, 0
+        used.add(bi)
+        # GÓP dữ liệu chuyển động ở nhịp nhanh của /track → đo đứng/đi chính xác
+        t["pos"].append((cx, cy, now))
+        t["moving"] = _is_moving(t["pos"], x2 - x1)
+
+        lab = t["label"]
+        if not t["hist"]:                 # chưa nhận diện lần nào → xám "…"
+            name, score, stranger, pending = "…", 0.0, False, True
+        elif lab == "LẠ":
+            name, score, stranger, pending = "Người lạ", t["hist"][-1][1], True, False
+        else:
+            name, score, stranger, pending = lab, t["hist"][-1][1], False, False
         dets.append({"name": name, "conf": round(float(score), 3), "stranger": stranger,
-                     "pending": pending, "moving": moving,
+                     "pending": pending, "moving": t["moving"],
                      "box": [int(x1), int(y1), int(x2), int(y2)]})
 
     dets.sort(key=lambda d: (not d["stranger"], -d["conf"]))
