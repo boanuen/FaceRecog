@@ -84,19 +84,22 @@ _tracks = []   # mỗi track: {'cx','cy','hist':deque((name,score)), 'miss':int,
 HYSTERESIS  = 0.04    # đã nhận tên → hạ ngưỡng 0.04 để giữ (khó rớt sang "lạ")
 MIN_PRESENCE = 0.5    # danh tính phải xuất hiện >= 50% cửa sổ mới được nhận
 MATCH_FRAC  = 0.18     # ngưỡng ghép track = 18% đường chéo khung (nới để bám khi di chuyển)
-MOVE_STEP_FRAC = 0.15  # bước dịch TRUNG BÌNH/frame > 15% bề rộng mặt → DI CHUYỂN
+MOVE_SPEED_FRAC = 0.6  # TỐC ĐỘ tâm mặt > 60% bề rộng mặt / GIÂY → DI CHUYỂN (độc lập FPS)
 STABLE_SECONDS = 2.0   # đứng im đủ 2 giây → ghi log 1 lần
 STABLE_GAP  = 1.5      # gián đoạn thấy > 1.5s → coi là lượt đứng MỚI (ghi lại)
 STRANGER_MIN = 4       # phải "lạ" liên tục >= 4 frame mới ghi Người lạ (bớt nhầm)
 
 def _is_moving(pos, wsize):
-    """pos: deque (cx,cy). Dùng BƯỚC DỊCH TRUNG BÌNH mỗi frame (ổn định hơn đỉnh):
-    đứng im rung nhẹ → bước nhỏ; đi bộ → bước lớn."""
-    if len(pos) < 3 or wsize <= 0:
+    """pos: deque (cx, cy, dt) với dt = datetime. Dùng TỐC ĐỘ (px/giây) chuẩn hoá theo
+    bề rộng mặt → KHÔNG phụ thuộc FPS: máy nhanh hay chậm đều phân biệt đứng/đi như nhau."""
+    if len(pos) < 2 or wsize <= 0:
         return False
-    steps = [((pos[i][0] - pos[i-1][0]) ** 2 + (pos[i][1] - pos[i-1][1]) ** 2) ** 0.5
-             for i in range(1, len(pos))]
-    return (sum(steps) / len(steps)) > MOVE_STEP_FRAC * wsize
+    dt = (pos[-1][2] - pos[0][2]).total_seconds()
+    if dt < 0.15:                       # chưa đủ thời gian để ước lượng tốc độ
+        return False
+    xs = [p[0] for p in pos]; ys = [p[1] for p in pos]
+    span = ((max(xs) - min(xs)) ** 2 + (max(ys) - min(ys)) ** 2) ** 0.5
+    return (span / dt) > MOVE_SPEED_FRAC * wsize
 
 def _match_thr(W, H):
     return MATCH_FRAC * (W * W + H * H) ** 0.5
@@ -131,8 +134,9 @@ def smooth_labels(faces, W, H, threshold):
             used.add(bt)
         t["hist"].append((bn, bs))
 
-        # ── ĐO CHUYỂN ĐỘNG: đứng im hay di chuyển ──
-        t["pos"].append((cx, cy))
+        # ── ĐO CHUYỂN ĐỘNG (theo TỐC ĐỘ, độc lập FPS): đứng im hay di chuyển ──
+        now = datetime.now()
+        t["pos"].append((cx, cy, now))
         t["moving"] = _is_moving(t["pos"], x2 - x1)
         motion = "Di chuyển" if t["moving"] else "Đứng im"
 
@@ -160,7 +164,6 @@ def smooth_labels(faces, W, H, threshold):
         # ── GHI NHẬT KÝ QUÉT ──
         #  ĐỨNG IM  : một danh tính đứng đủ STABLE_SECONDS → ghi 1 lần; lặp lại thì BỎ QUA.
         #  DI CHUYỂN: ghi OK/FAIL mỗi lần chuyển trạng thái (son→lạ→son…).
-        now = datetime.now()
         old = t.get("logged_label", "")
         lbl = t["label"]
         if lbl != "LẠ":
@@ -303,7 +306,8 @@ async def track_faces(
 
     rec.det_conf = min(max(conf_detect, 0.05), 0.9)
     loop = asyncio.get_event_loop()
-    boxes = await loop.run_in_executor(executor, rec.detect, img)   # YOLO only
+    # YOLO ở imgsz nhỏ (320) → nhanh hơn nhiều trên CPU → khung bám sát ngay cả máy yếu
+    boxes = await loop.run_in_executor(executor, lambda: rec.detect(img, imgsz=320))
 
     H, W = img.shape[:2]
     match_thr = _match_thr(W, H)

@@ -52,11 +52,12 @@ class FaceRecognizer:
         if db_path and os.path.isfile(db_path):
             self.load_db(db_path)
 
-    def detect(self, img_bgr):
-        """Trả list (x1,y1,x2,y2,conf) của MỌI mặt."""
+    def detect(self, img_bgr, imgsz=None):
+        """Trả list (x1,y1,x2,y2,conf) của MỌI mặt.
+        imgsz nhỏ hơn (vd 320) → YOLO nhanh hơn nhiều trên CPU (dùng cho /track bám khung)."""
         r = self.yolo(
             img_bgr, conf=self.det_conf, iou=self.det_iou,
-            imgsz=self.det_imgsz, half=self.half,
+            imgsz=imgsz or self.det_imgsz, half=self.half,
             device=0 if self.device == "cuda" else "cpu",
             end2end=False, verbose=False,
         )[0]
