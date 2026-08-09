@@ -11,12 +11,17 @@ import os
 import numpy as np
 import cv2
 import torch
+import onnxruntime as ort
 from ultralytics import YOLO
 from insightface.app import FaceAnalysis
 
 BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
 YOLO_PATH = os.path.join(BASE_DIR, "best.pt")
+YOLO_OV   = os.path.join(BASE_DIR, "best_openvino_model")   # YOLO đã export sang OpenVINO (Intel)
 DB_PATH   = os.path.join(BASE_DIR, "face_db.pt")
+
+# Cho phép ép chọn thiết bị OpenVINO cho YOLO qua biến môi trường: "GPU" (iGPU) hoặc "CPU".
+OV_YOLO_DEVICE = os.environ.get("OV_YOLO_DEVICE", "intel:gpu")
 
 MARGIN = 0.30   # nới quanh box YOLO trước khi đưa vào ArcFace (cần ít context để căn landmark)
 
@@ -31,17 +36,40 @@ class FaceRecognizer:
         self.det_iou   = det_iou
         self.half      = self.device == "cuda"
 
-        # YOLO26 — detector khuôn mặt
-        self.yolo = YOLO(yolo_path)
+        avail = ort.get_available_providers()
+        self.has_openvino = "OpenVINOExecutionProvider" in avail
 
-        # ArcFace — căn chỉnh + embedding. CPU mặc định (onnxruntime CPU).
-        # arc_det_size nhỏ hơn (224 thay vì 320) → SCRFD nhanh hơn ~30% mà vẫn căn tốt
-        # use_gpu_arcface=True cần onnxruntime-gpu + đủ CUDA runtime libs 
-        providers = (["CUDAExecutionProvider", "CPUExecutionProvider"]
-                     if use_gpu_arcface else ["CPUExecutionProvider"])
-        self.arc = FaceAnalysis(name="buffalo_l", providers=providers,
-                                allowed_modules=["detection", "recognition"])
-        self.arc.prepare(ctx_id=0 if use_gpu_arcface else -1, det_size=arc_det_size)
+        # ── YOLO26 — detector khuôn mặt ──
+        # Ưu tiên bản OpenVINO (Intel NUC: nhanh hơn nhiều trên CPU/iGPU) nếu đã export.
+        self.yolo_device = None
+        if os.path.isdir(YOLO_OV):
+            self.yolo = YOLO(YOLO_OV, task="detect")
+            self.yolo_device = OV_YOLO_DEVICE
+            print(f"[recognizer] YOLO: OpenVINO ({OV_YOLO_DEVICE})")
+        else:
+            self.yolo = YOLO(yolo_path)
+
+        # ── ArcFace — căn chỉnh + embedding ──
+        # Tự chọn provider NHANH NHẤT sẵn có: CUDA > OpenVINO (Intel) > CPU.
+        # OpenVINO: tăng tốc 2-5× trên Intel mà GIỮ nguyên model & độ chính xác, KHÔNG enroll lại.
+        if use_gpu_arcface and "CUDAExecutionProvider" in avail:
+            providers, arc_ctx = ["CUDAExecutionProvider", "CPUExecutionProvider"], 0
+        elif self.has_openvino:
+            providers, arc_ctx = ["OpenVINOExecutionProvider", "CPUExecutionProvider"], 0
+        else:
+            providers, arc_ctx = ["CPUExecutionProvider"], -1
+        self.arc_providers = providers
+        try:
+            self.arc = FaceAnalysis(name="buffalo_l", providers=providers,
+                                    allowed_modules=["detection", "recognition"])
+            self.arc.prepare(ctx_id=arc_ctx, det_size=arc_det_size)
+        except Exception as e:      # provider tối ưu lỗi → lùi về CPU cho chắc chạy được
+            print(f"[recognizer] ArcFace provider {providers} lỗi ({e}) → dùng CPU")
+            self.arc_providers = ["CPUExecutionProvider"]
+            self.arc = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"],
+                                    allowed_modules=["detection", "recognition"])
+            self.arc.prepare(ctx_id=-1, det_size=arc_det_size)
+        print(f"[recognizer] ArcFace providers: {self.arc_providers}")
 
         # DB phẳng để so khớp bằng 1 phép nhân ma trận
         self.db_names = []      # ['nghia','quan',...]
@@ -55,11 +83,14 @@ class FaceRecognizer:
     def detect(self, img_bgr, imgsz=None):
         """Trả list (x1,y1,x2,y2,conf) của MỌI mặt.
         imgsz nhỏ hơn (vd 320) → YOLO nhanh hơn nhiều trên CPU (dùng cho /track bám khung)."""
+        if self.yolo_device is not None:            # YOLO OpenVINO (Intel): CPU/iGPU
+            dev = self.yolo_device
+        else:
+            dev = 0 if self.device == "cuda" else "cpu"
         r = self.yolo(
             img_bgr, conf=self.det_conf, iou=self.det_iou,
             imgsz=imgsz or self.det_imgsz, half=self.half,
-            device=0 if self.device == "cuda" else "cpu",
-            end2end=False, verbose=False,
+            device=dev, end2end=False, verbose=False,
         )[0]
         out = []
         for b in r.boxes:
