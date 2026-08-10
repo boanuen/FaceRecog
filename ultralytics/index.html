@@ -171,6 +171,18 @@
             </div>
 
             <div class="card">
+                <h3>Nhật ký <span style="font-size:11px;color:#94a3b8;font-weight:normal;"></span></h3>
+                <div id="log" class="log"><div class="empty">Chưa có sự kiện</div></div>
+                <div style="font-size:11px;color:#94a3b8;margin:12px 0 6px;">Xuất Excel — chọn kiểu:</div>
+                <a href="/export?mode=full" target="_blank" class="btn-link" style="margin-top:0;background:linear-gradient(135deg,#16a34a,#15803d);font-size:13px;padding:9px;">
+                    ① Đầy đủ (có di chuyển)
+                </a>
+                <a href="/export?mode=once" target="_blank" class="btn-link" style="margin-top:8px;background:linear-gradient(135deg,#0ea5e9,#0284c7);font-size:13px;padding:9px;">
+                    ② Chỉ nhận dạng 1 lần/người
+                </a>
+            </div>
+
+            <div class="card">
                 <h3>Thêm / Quản lý người</h3>
                 <div style="font-size:12px;color:#94a3b8;margin-bottom:8px;">Go ten (co the la <b>nguoi moi</b>) roi bam nut chup — dua mat vao camera. Khong can train.</div>
                 <input id="cap-person" list="people-list" class="select-cam" placeholder="Tên người (vd: tui, hoặc tên mới)" autocomplete="off"
@@ -184,14 +196,6 @@
                 <div id="cap-status" style="font-size:13px;color:#94a3b8;margin-top:8px;text-align:center;">Chưa chụp mẫu nào</div>
                 <div style="font-size:12px;color:#94a3b8;margin:12px 0 6px;border-top:1px solid #334155;padding-top:10px;">Người trong hệ thống:</div>
                 <div id="people-box" style="font-size:13px;color:#cbd5e1;">Đang tải...</div>
-            </div>
-
-            <div class="card">
-                <h3>Nhật ký <span style="font-size:11px;color:#94a3b8;font-weight:normal;"></span></h3>
-                <div id="log" class="log"><div class="empty">Chưa có sự kiện</div></div>
-                <a id="export-btn" href="/export" target="_blank" class="btn-link" style="margin-top:10px;background:linear-gradient(135deg,#16a34a,#15803d);font-size:13px;padding:9px;">
-                    Xuat Excel (Ngay / Tuan / Thang)
-                </a>
             </div>
 
             <div class="card">

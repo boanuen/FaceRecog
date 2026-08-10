@@ -555,13 +555,23 @@ def _sessions_from_events(events: list[dict]) -> list[dict]:
     return sorted(sessions, key=lambda s: s["entry_dt"])
 
 
-def _make_excel(events: list[dict], scans: list[dict], people: list[dict]) -> bytes:
+def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
+                mode: str = "full") -> bytes:
     """
-    3 sheet: Ngay / Tuan / Thang.
-    - Ngay : NHẬT KÝ QUÉT (mỗi sự kiện OK/FAIL/LẠ 1 dòng), nhóm theo ngày.
-    - Tuan/Thang: bảng chấm công theo phiên (giữ nguyên như cũ).
+    3 sheet: Ngay / Tuan / Thang. Giữ nguyên FORMAT.
+    - mode="full": nhật ký đầy đủ (đứng im + di chuyển + fail/lạ).
+    - mode="once": CHỈ nhận dạng mỗi người 1 lần (bỏ di chuyển, bỏ lặp, bỏ fail/lạ).
+    Tuan/Thang: bảng chấm công theo phiên (giữ nguyên).
     """
     from openpyxl.utils import get_column_letter
+
+    if mode == "once":
+        # chỉ giữ lần OK ĐẦU TIÊN của mỗi người → mỗi người đúng 1 dòng
+        seen, filtered = set(), []
+        for e in sorted(scans, key=lambda x: x["dt"]):
+            if e["status"] == "OK" and e["person"] not in seen:
+                seen.add(e["person"]); filtered.append(e)
+        scans = filtered
 
     now           = datetime.now()
     today         = now.date()
@@ -931,10 +941,12 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict]) -> by
 
 
 @app.get("/export")
-def export_attendance():
-    """Xuat nhat ky ra Excel (3 sheet: Ngay / Tuan / Thang)."""
-    data = _make_excel(_attendance_log, _scan_log, rec.people_summary())
-    filename = f"nhat_ky_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+def export_attendance(mode: str = "full"):
+    """Xuat nhat ky ra Excel. mode: 'full' (đầy đủ có di chuyển) | 'once' (mỗi người 1 lần)."""
+    mode = "once" if mode == "once" else "full"
+    data = _make_excel(_attendance_log, _scan_log, rec.people_summary(), mode=mode)
+    tag = "1lan" if mode == "once" else "daydu"
+    filename = f"nhat_ky_{tag}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     return StreamingResponse(
         io.BytesIO(data),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
