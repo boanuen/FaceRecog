@@ -52,17 +52,26 @@ _in_room: dict[str, datetime] = {}   # name → thời điểm vào phòng
 #   FAIL = track đang là người quen X bỗng thành "người lạ" (nhận dạng hỏng)
 #   LẠ   = người lạ hoàn toàn xuất hiện
 # motion ∈ {"Đứng im","Di chuyển"} — trạng thái chuyển động của mặt lúc xảy ra sự kiện.
-_scan_log: list[dict] = []
-# ĐỨNG IM: theo dõi theo DANH TÍNH (không theo track) → đứng đủ 2s ghi 1 lần, dù track
-# bị tái tạo. key = tên người (hoặc "Người lạ").
-_stable_start:  dict = {}   # key → lúc bắt đầu lượt đứng hiện tại
-_stable_seen:   dict = {}   # key → lần thấy đứng gần nhất
-_stable_logged: set  = set()  # key đã ghi cho lượt đứng hiện tại
+_scan_log: list[dict] = []   # mỗi entry kèm "cam" (camera nào sinh ra sự kiện)
 
-def _log_scan(person: str, status: str, motion: str = "Đứng im"):
+# ── TRẠNG THÁI TRACK THEO TỪNG CAMERA ──
+# 2 camera = 2 luồng độc lập → state tracking RIÊNG cho mỗi cam (mặt cam1 không lẫn cam2).
+CAMERAS = {"cam1": "UGreen 2K", "cam2": "Rapoo C260"}   # id → tên hiển thị
+
+class CamState:
+    def __init__(self):
+        self.tracks = []              # track của riêng camera này
+        self.stable_start = {}        # key → lúc bắt đầu đứng
+        self.stable_seen  = {}        # key → lần thấy đứng gần nhất
+        self.stable_logged = set()    # key đã ghi đứng im (1 lần/người/camera)
+
+_cam_states: dict = defaultdict(CamState)
+
+def _log_scan(person: str, status: str, cam: str, motion: str = "Đứng im"):
     _scan_log.append({"dt": datetime.now(), "person": person,
                       "role": rec.db_roles.get(person, "kỹ sư"),
-                      "status": status, "motion": motion})
+                      "status": status, "motion": motion,
+                      "cam": CAMERAS.get(cam, cam)})
 
 print(f"[main] Khởi tạo YOLO26 + ArcFace...")
 rec = FaceRecognizer(det_conf=CONF_DETECT)   # YOLO detect mặt, ArcFace nhận diện tên
@@ -86,9 +95,8 @@ print("[main] Warm-up done")
 
 # ── BỘ THEO DÕI + LÀM MƯỢT ĐIỂM SỐ (chống nhảy "người lạ") ────────────────
 # Mỗi mặt được ghép với 1 track theo vị trí. Track giữ lịch sử (tên, điểm) vài frame.
-# Quyết định dựa trên ĐIỂM TRUNG BÌNH của danh tính nổi trội trong cửa sổ + HYSTERESIS
-# (đã nhận là ai thì bám lấy, một frame điểm thấp KHÔNG lật ngay sang "lạ").
-_tracks = []   # mỗi track: {'cx','cy','hist':deque((name,score)), 'seen':datetime, 'label':str,...}
+# Quyết định dựa trên ĐIỂM TRUNG BÌNH của danh tính nổi trội trong cửa sổ + HYSTERESIS.
+# LƯU Ý: track state nằm TRONG CamState (mỗi camera 1 bộ riêng — xem _cam_states).
 
 HYSTERESIS  = 0.04    # đã nhận tên → hạ ngưỡng 0.04 để giữ (khó rớt sang "lạ")
 MIN_PRESENCE = 0.5    # danh tính phải xuất hiện >= 50% cửa sổ mới được nhận
@@ -128,19 +136,19 @@ def _new_track(cx, cy, now):
             "pos": deque(maxlen=SMOOTH_WINDOW), "moving": False, "ever_known": False,
             "arc_time": None, "arc_score": 0.5}   # lần ArcFace gần nhất + điểm (cache)
 
-def _nearest_track(cxn, cyn, thr):
+def _nearest_track(tracks, cxn, cyn, thr):
     """Track gần nhất (CHỈ ĐỌC, không chiếm) — để quyết định có cần chạy ArcFace không."""
     best, bd = None, thr
-    for t in _tracks:
+    for t in tracks:
         d = ((t["cx"] - cxn) ** 2 + (t["cy"] - cyn) ** 2) ** 0.5
         if d < bd:
             bd, best = d, t
     return best
 
-def _match_track_idx(cx, cy, thr, used):
-    """Ghép (cx,cy) với track GẦN NHẤT chưa dùng. Trả index hoặc None."""
+def _match_track_idx(tracks, cx, cy, thr, used):
+    """Ghép (cx,cy) với track GẦN NHẤT chưa dùng trong `tracks`. Trả index hoặc None."""
     bt, bd = None, thr
-    for ti, t in enumerate(_tracks):
+    for ti, t in enumerate(tracks):
         if ti in used:
             continue
         d = ((t["cx"] - cx) ** 2 + (t["cy"] - cy) ** 2) ** 0.5
@@ -148,19 +156,17 @@ def _match_track_idx(cx, cy, thr, used):
             bd, bt = d, ti
     return bt
 
-def _prune_tracks(now):
-    """Dọn track theo THỜI GIAN (độc lập FPS): track không thấy > TRACK_TTL giây → bỏ.
-    Tránh track cũ tồn đọng gây ghép nhầm → nhầm người lạ."""
-    global _tracks
-    _tracks = [t for t in _tracks if (now - t["seen"]).total_seconds() <= TRACK_TTL]
+def _prune_tracks(st, now):
+    """Dọn track cũ của MỘT camera theo THỜI GIAN (độc lập FPS)."""
+    st.tracks = [t for t in st.tracks if (now - t["seen"]).total_seconds() <= TRACK_TTL]
 
-def smooth_labels(faces, W, H, threshold):
-    """faces: list {box, best_name, score, ...}. Trả list (label, disp_score) đã làm mượt.
-    label = tên hoặc 'LẠ'. disp_score = điểm trung bình (ổn định, đỡ nhảy %)."""
-    global _tracks
+def smooth_labels(faces, W, H, threshold, st, cam):
+    """faces → list (label, disp_score) đã làm mượt, dùng track state `st` của camera `cam`.
+    Ghi nhật ký kèm tên camera."""
     thr = _match_thr()
     now = datetime.now()
-    _prune_tracks(now)   # dọn track cũ TRƯỚC khi ghép → không hồi sinh track tồn đọng
+    _prune_tracks(st, now)   # dọn track cũ TRƯỚC khi ghép → không hồi sinh track tồn đọng
+    tracks = st.tracks
     used, out = set(), []
     for f in faces:
         x1, y1, x2, y2 = f["box"]
@@ -169,12 +175,12 @@ def smooth_labels(faces, W, H, threshold):
         wsn = (x2 - x1) / W
         bn, bs = f.get("best_name"), float(f.get("score", 0.0))
 
-        bt = _match_track_idx(cxn, cyn, thr, used)
+        bt = _match_track_idx(tracks, cxn, cyn, thr, used)
         if bt is None:
             t = _new_track(cxn, cyn, now)
-            _tracks.append(t); used.add(len(_tracks) - 1)
+            tracks.append(t); used.add(len(tracks) - 1)
         else:
-            t = _tracks[bt]
+            t = tracks[bt]
             t["cx"], t["cy"], t["seen"] = cxn, cyn, now
             used.add(bt)
         t["hist"].append((bn, bs))
@@ -216,28 +222,26 @@ def smooth_labels(faces, W, H, threshold):
         if t["moving"]:
             # ── DI CHUYỂN: ghi MỖI frame nhận diện (đi qua thì ghi nhiều), fail khi hỏng ──
             if lbl != "LẠ" and len(t["hist"]) >= 1:
-                _log_scan(lbl, "OK", "Di chuyển"); t["logged_label"] = lbl   # nhận ra → OK
+                _log_scan(lbl, "OK", cam, "Di chuyển"); t["logged_label"] = lbl
             elif lbl == "LẠ" and old not in ("", "LẠ"):
-                _log_scan(old, "FAIL", "Di chuyển"); t["logged_label"] = lbl # người quen → hỏng
+                _log_scan(old, "FAIL", cam, "Di chuyển"); t["logged_label"] = lbl
             elif lbl == "LẠ" and old != "LẠ" and not t["ever_known"] and len(t["hist"]) >= STRANGER_MIN:
-                _log_scan("Người lạ", "LẠ", "Di chuyển"); t["logged_label"] = lbl
-            # đang di chuyển → reset đồng hồ đứng im (nhưng GIỮ cờ đã-ghi: đứng im chỉ ghi 1 lần)
-            _stable_start.pop(key, None); _stable_seen.pop(key, None)
+                _log_scan("Người lạ", "LẠ", cam, "Di chuyển"); t["logged_label"] = lbl
+            # đang di chuyển → reset đồng hồ đứng im (GIỮ cờ đã-ghi: đứng im chỉ ghi 1 lần)
+            st.stable_start.pop(key, None); st.stable_seen.pop(key, None)
         else:
-            # ── ĐỨNG IM: mỗi người CHỈ ghi 1 lần DUY NHẤT (lần đầu đứng đủ STABLE_SECONDS),
-            #    sau đó bỏ qua mọi lần đứng im khác. Chỉ DI CHUYỂN mới ghi tiếp.
+            # ── ĐỨNG IM: mỗi người CHỈ ghi 1 lần DUY NHẤT trên camera này ──
             ok_stable = (lbl != "LẠ" and len(t["hist"]) >= 1)
             la_stable = (lbl == "LẠ" and not t["ever_known"] and len(t["hist"]) >= STRANGER_MIN)
-            if (ok_stable or la_stable) and key not in _stable_logged:
-                prev = _stable_seen.get(key)
+            if (ok_stable or la_stable) and key not in st.stable_logged:
+                prev = st.stable_seen.get(key)
                 if prev is None or (now - prev).total_seconds() > STABLE_GAP:
-                    _stable_start[key] = now          # bắt đầu tính giờ đứng
-                _stable_seen[key] = now
-                if (now - _stable_start[key]).total_seconds() >= STABLE_SECONDS:
-                    _log_scan(key, "LẠ" if key == "Người lạ" else "OK", "Đứng im")
-                    _stable_logged.add(key)           # đã ghi → KHÔNG bao giờ ghi đứng im lại
+                    st.stable_start[key] = now          # bắt đầu tính giờ đứng
+                st.stable_seen[key] = now
+                if (now - st.stable_start[key]).total_seconds() >= STABLE_SECONDS:
+                    _log_scan(key, "LẠ" if key == "Người lạ" else "OK", cam, "Đứng im")
+                    st.stable_logged.add(key)           # đã ghi → không ghi đứng im lại (cam này)
                     t["logged_label"] = lbl
-        # KHÔNG cập nhật logged_label mỗi frame (chỉ cập nhật khi thực sự ghi ở trên)
 
     return out
 
@@ -266,6 +270,7 @@ async def process_frame(
     file: UploadFile = File(...),
     conf_detect: float = Form(CONF_DETECT),   # ngưỡng YOLO bắt mặt (web gửi lên)
     conf_known: float = Form(THRESHOLD),      # ngưỡng COSINE người quen/lạ (web gửi lên)
+    cam: str = Form("cam1"),                  # camera nào gửi frame (state tracking riêng)
 ):
     """
     Nhận frame webcam/video → YOLO khoanh mặt → ArcFace embedding → cosine với DB.
@@ -281,6 +286,7 @@ async def process_frame(
     conf_detect = min(max(conf_detect, 0.05), 0.9)
     threshold   = min(max(conf_known, 0.05), 0.95)   # conf_known giờ là ngưỡng cosine
 
+    st = _cam_states[cam]                 # state tracking riêng của camera này
     rec.det_conf = conf_detect
     t0 = time.perf_counter()
     loop = asyncio.get_event_loop()
@@ -297,7 +303,7 @@ async def process_frame(
     for i, b in enumerate(boxes):
         x1, y1, x2, y2 = b[:4]
         cxn, cyn = (x1 + x2) / 2 / W, (y1 + y2) / 2 / H
-        tr = _nearest_track(cxn, cyn, thr_m)
+        tr = _nearest_track(st.tracks, cxn, cyn, thr_m)
         trk_of.append(tr)
         if (tr is not None and tr["label"] != "LẠ" and tr["arc_time"] is not None
                 and (now_dt - tr["arc_time"]).total_seconds() < REFRESH_SEC):
@@ -330,10 +336,11 @@ async def process_frame(
     infer_ms = (time.perf_counter() - t0) * 1000
 
     n0 = len(_scan_log)
-    voted = smooth_labels(faces, W, H, threshold)   # [(label, disp_score)] đã làm mượt
-    # sự kiện quét MỚI sinh ra ở frame này → gửi về client hiện live
+    voted = smooth_labels(faces, W, H, threshold, st, cam)   # làm mượt + ghi log theo camera
+    # sự kiện quét MỚI sinh ra ở frame này → gửi về client hiện live (kèm tên camera)
     scan_events = [{"time": e["dt"].strftime("%H:%M:%S"), "person": e["person"],
-                    "status": e["status"], "motion": e["motion"]} for e in _scan_log[n0:]]
+                    "status": e["status"], "motion": e["motion"], "cam": e["cam"]}
+                   for e in _scan_log[n0:]]
 
     stranger = False
     known = []
@@ -372,6 +379,7 @@ async def process_frame(
 async def track_faces(
     file: UploadFile = File(...),
     conf_detect: float = Form(CONF_DETECT),
+    cam: str = Form("cam1"),                  # camera nào (state tracking riêng)
 ):
     """CHỈ chạy YOLO (nhanh ~50ms) → trả TOẠ ĐỘ KHUNG bám sát thời gian thực.
     Tên/điểm lấy từ track gần nhất (do /process-frame cập nhật) → không phải chờ ArcFace.
@@ -386,23 +394,24 @@ async def track_faces(
     # YOLO ở imgsz nhỏ → nhanh hơn nhiều trên CPU → khung bám sát ngay cả máy yếu
     boxes = await loop.run_in_executor(executor, lambda: rec.detect(img, imgsz=TRACK_IMGSZ))
 
+    st = _cam_states[cam]                 # state tracking riêng của camera này
     H, W = img.shape[:2]
     match_thr = _match_thr()
     now = datetime.now()
-    _prune_tracks(now)   # dọn track cũ TRƯỚC khi ghép
+    _prune_tracks(st, now)   # dọn track cũ TRƯỚC khi ghép
+    tracks = st.tracks
     used, dets = set(), []
     for (x1, y1, x2, y2, conf) in boxes:
         # TOẠ ĐỘ CHUẨN HOÁ [0,1] → CHUNG hệ với /process-frame (dù ảnh khác độ phân giải)
         cxn, cyn = (x1 + x2) / 2 / W, (y1 + y2) / 2 / H
         wsn = (x2 - x1) / W
-        bi = _match_track_idx(cxn, cyn, match_thr, used)
+        bi = _match_track_idx(tracks, cxn, cyn, match_thr, used)
         if bi is None:
-            # /track TẠO track mới (nhanh, 3-5fps) → chờ /process-frame gán tên.
-            # Nhờ vậy track sẵn lịch sử vị trí → người di chuyển ghi được ngay khi nhận ra.
+            # /track TẠO track mới (nhanh) → chờ /process-frame gán tên.
             t = _new_track(cxn, cyn, now)
-            _tracks.append(t); bi = len(_tracks) - 1
+            tracks.append(t); bi = len(tracks) - 1
         else:
-            t = _tracks[bi]
+            t = tracks[bi]
             t["cx"], t["cy"], t["seen"] = cxn, cyn, now
         used.add(bi)
         # GÓP dữ liệu chuyển động ở nhịp nhanh của /track → đo đứng/đi chính xác
@@ -647,16 +656,11 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
 
-    # ════════════════════════════════════════════════════════════════════════
-    # SHEET NGÀY  —  NHẬT KÝ QUÉT
-    #   BẢNG KỸ SƯ (trái) | BẢNG SINH VIÊN (phải)  → các lần nhận diện OK
-    #   BẢNG NGƯỜI LẠ / FAIL (bên dưới)            → các lần fail + người lạ
-    # ════════════════════════════════════════════════════════════════════════
     ws1 = wb.create_sheet("Ngày")
     ORANGE_ROW = PatternFill("solid", fgColor="FDEBD0")
 
-    OK_COLS   = ["STT", "Ngày", "Giờ", "Họ và Tên", "Trạng thái"]
-    OK_WIDTHS = [5, 10, 9, 20, 11]
+    OK_COLS   = ["STT", "Ngày", "Giờ", "Họ và Tên", "Camera", "Trạng thái"]
+    OK_WIDTHS = [5, 10, 9, 18, 14, 11]
     NC  = len(OK_COLS)
     KS1 = 1
     GAP = KS1 + NC            # cột giữa 2 bảng (cũng là cột "Kết quả" của bảng fail)
@@ -664,7 +668,7 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
 
     # tiêu đề 2 bảng
     ws1.merge_cells(start_row=1, start_column=KS1, end_row=1, end_column=KS1+NC-1)
-    c = ws1.cell(row=1, column=KS1, value="BẢNG KỸ SƯ  (nhận diện OK)")
+    c = ws1.cell(row=1, column=KS1, value="BẢNG NHÂN VIÊN (nhận diện OK)")
     c.font = TITLE_FONT; c.fill = TITLE_KS; c.alignment = CENTER
     ws1.merge_cells(start_row=1, start_column=SV1, end_row=1, end_column=SV1+NC-1)
     c = ws1.cell(row=1, column=SV1, value="BẢNG SINH VIÊN  (nhận diện OK)")
@@ -691,7 +695,7 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
         for i, e in enumerate(events):
             ri = 3 + i
             vals = [i+1, e["dt"].strftime("%d/%m"), e["dt"].strftime("%H:%M:%S"),
-                    e["person"], e.get("motion", "Đứng im")]
+                    e["person"], e.get("cam", ""), e.get("motion", "Đứng im")]
             for ci, val in enumerate(vals):
                 c = ws1.cell(row=ri, column=base+ci, value=val)
                 c.border = BORDER; c.font = NORM
@@ -706,11 +710,11 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
     sum_row = 3 + n_rows
     ws1.merge_cells(start_row=sum_row, start_column=KS1, end_row=sum_row, end_column=KS1+NC-1)
     c = ws1.cell(row=sum_row, column=KS1,
-                 value=f"KS: {len(ok_ks)} lần OK  ({len({e['person'] for e in ok_ks})} người)")
+                 value=f"Nhân viên: {len(ok_ks)} lần OK  ({len({e['person'] for e in ok_ks})} người)")
     c.font = SUM_FONT; c.fill = SUM_KS; c.alignment = CENTER
     ws1.merge_cells(start_row=sum_row, start_column=SV1, end_row=sum_row, end_column=SV1+NC-1)
     c = ws1.cell(row=sum_row, column=SV1,
-                 value=f"SV: {len(ok_sv)} lần OK  ({len({e['person'] for e in ok_sv})} người)")
+                 value=f"Sinh viên: {len(ok_sv)} lần OK  ({len({e['person'] for e in ok_sv})} người)")
     c.font = SUM_FONT; c.fill = SUM_SV; c.alignment = CENTER
     ws1.row_dimensions[sum_row].height = 22
 
@@ -722,7 +726,7 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
     ws1.row_dimensions[ftitle].height = 26
 
     fhdr = ftitle + 1
-    for ci, h in enumerate(["STT", "Ngày", "Giờ", "Họ và Tên", "Trạng thái", "Kết quả"]):
+    for ci, h in enumerate(["STT", "Ngày", "Giờ", "Họ và Tên", "Camera", "Trạng thái", "Kết quả"]):
         c = ws1.cell(row=fhdr, column=1+ci, value=h)
         c.font = HDR_FONT; c.fill = RED_DARK; c.alignment = CENTER; c.border = BORDER
     ws1.row_dimensions[fhdr].height = 22
@@ -733,21 +737,17 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
         fill = RED_ROW if e["status"] == "FAIL" else ORANGE_ROW
         fcol = "C0392B" if e["status"] == "FAIL" else "CA6F1E"
         vals = [i+1, e["dt"].strftime("%d/%m"), e["dt"].strftime("%H:%M:%S"),
-                e["person"], e.get("motion", "Đứng im"), e["status"]]
+                e["person"], e.get("cam", ""), e.get("motion", "Đứng im"), e["status"]]
         for ci, val in enumerate(vals):
             c = ws1.cell(row=ri, column=1+ci, value=val)
             c.border = BORDER; c.fill = fill
             c.alignment = LEFT if ci == 3 else CENTER
-            c.font = Font(bold=True, size=10, color=fcol) if ci == 5 else NORM
+            c.font = Font(bold=True, size=10, color=fcol) if ci == 6 else NORM
         ws1.row_dimensions[ri].height = 20
     if not fails:
         c = ws1.cell(row=fhdr+1, column=1, value="Không có fail / người lạ.")
         c.font = NORM; c.alignment = LEFT
 
-    # ════════════════════════════════════════════════════════════════════════
-    # SHEET TUẦN  —  mỗi tuần 1 nhóm (separator + hàng người + dòng tổng)
-    # Cột: STT | Họ và Tên | Ngày đi làm (X/7)
-    # ════════════════════════════════════════════════════════════════════════
     W_COLS   = ["STT", "Họ và Tên", "Ngày đi làm"]
     W_WIDTHS = [5, 22, 15]
     W_NCOLS  = len(W_COLS)
@@ -757,7 +757,7 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
     ws2 = wb.create_sheet("Tuần")
 
     ws2.merge_cells(start_row=1, start_column=KS2, end_row=1, end_column=KS2+W_NCOLS-1)
-    c = ws2.cell(row=1, column=KS2, value="BẢNG KỸ SƯ")
+    c = ws2.cell(row=1, column=KS2, value="BẢNG NHÂN VIÊN")
     c.font = TITLE_FONT; c.fill = TITLE_KS; c.alignment = CENTER
 
     ws2.merge_cells(start_row=1, start_column=SV2, end_row=1, end_column=SV2+W_NCOLS-1)
@@ -829,19 +829,15 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
         sv_present_w = len([n for n in sv_names if week_to_dates_sv[(ws, n)]])
 
         ws2.merge_cells(start_row=cur_row, start_column=KS2, end_row=cur_row, end_column=KS2+W_NCOLS-1)
-        c = ws2.cell(row=cur_row, column=KS2, value=f"KS đi làm: {ks_present_w}/{total_ks} người")
+        c = ws2.cell(row=cur_row, column=KS2, value=f"Nhân viên đi làm: {ks_present_w}/{total_ks} người")
         c.font = SUM_FONT; c.fill = SUM_KS; c.alignment = CENTER
 
         ws2.merge_cells(start_row=cur_row, start_column=SV2, end_row=cur_row, end_column=SV2+W_NCOLS-1)
-        c = ws2.cell(row=cur_row, column=SV2, value=f"SV đi làm: {sv_present_w}/{total_sv} người")
+        c = ws2.cell(row=cur_row, column=SV2, value=f"Sinh viên đi làm: {sv_present_w}/{total_sv} người")
         c.font = SUM_FONT; c.fill = SUM_SV; c.alignment = CENTER
         ws2.row_dimensions[cur_row].height = 22
         cur_row += 2
 
-    # ════════════════════════════════════════════════════════════════════════
-    # SHEET THÁNG  —  mỗi tháng 1 nhóm (separator + hàng người + dòng tổng)
-    # Cột: STT | Họ và Tên | Ngày đi làm (X/31 ...)
-    # ════════════════════════════════════════════════════════════════════════
     M_COLS   = ["STT", "Họ và Tên", "Ngày đi làm"]
     M_WIDTHS = [5, 22, 18]
     M_NCOLS  = len(M_COLS)
@@ -851,7 +847,7 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
     ws3 = wb.create_sheet("Tháng")
 
     ws3.merge_cells(start_row=1, start_column=KS3, end_row=1, end_column=KS3+M_NCOLS-1)
-    c = ws3.cell(row=1, column=KS3, value="BẢNG KỸ SƯ")
+    c = ws3.cell(row=1, column=KS3, value="BẢNG NHÂN VIÊN")
     c.font = TITLE_FONT; c.fill = TITLE_KS; c.alignment = CENTER
 
     ws3.merge_cells(start_row=1, start_column=SV3, end_row=1, end_column=SV3+M_NCOLS-1)
@@ -925,11 +921,11 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
         sv_present_m = len([n for n in sv_names if month_to_dates_sv[(ym, n)]])
 
         ws3.merge_cells(start_row=cur_row, start_column=KS3, end_row=cur_row, end_column=KS3+M_NCOLS-1)
-        c = ws3.cell(row=cur_row, column=KS3, value=f"KS đi làm: {ks_present_m}/{total_ks} người")
+        c = ws3.cell(row=cur_row, column=KS3, value=f"Nhân viên đi làm: {ks_present_m}/{total_ks} người")
         c.font = SUM_FONT; c.fill = SUM_KS; c.alignment = CENTER
 
         ws3.merge_cells(start_row=cur_row, start_column=SV3, end_row=cur_row, end_column=SV3+M_NCOLS-1)
-        c = ws3.cell(row=cur_row, column=SV3, value=f"SV đi làm: {sv_present_m}/{total_sv} người")
+        c = ws3.cell(row=cur_row, column=SV3, value=f"Sinh viên đi làm: {sv_present_m}/{total_sv} người")
         c.font = SUM_FONT; c.fill = SUM_SV; c.alignment = CENTER
         ws3.row_dimensions[cur_row].height = 22
         cur_row += 2

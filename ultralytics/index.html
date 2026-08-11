@@ -119,43 +119,51 @@
     <div id="status-tag" class="status">Đang kết nối Camera...</div>
 
     <div class="layout">
-        <!-- CỘT TRÁI: video + điều khiển -->
+        <!-- CỘT TRÁI: 2 camera song song -->
         <div class="left">
-            <div class="display-box" style="position:relative;">
-                <video id="webcam-hidden" autoplay playsinline muted
-                       style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;display:none;"></video>
-                <canvas id="overlay"
-                        style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;pointer-events:none;"></canvas>
-                <p id="placeholder-text" style="color:#64748b;">Đang kết nối Camera...</p>
-            </div>
-            <div class="controls">
-                <label style="font-size:13px;color:#94a3b8;">Nguồn Camera:</label>
-                <select id="cam-select" class="select-cam" onchange="switchCamera()"></select>
-                <div class="btn-row">
-                    <button class="btn btn-green" onclick="startCamera()">Bật Cam</button>
-                    <button class="btn btn-red" onclick="stopCamera()">Tắt Cam</button>
+            <div class="cams-row" style="display:flex;gap:14px;flex-wrap:wrap;">
+                <!-- CAMERA 1 -->
+                <div class="card" style="flex:1 1 320px;min-width:290px;">
+                    <h3>📷 Camera 1 · <span style="color:#38bdf8">UGreen 2K</span></h3>
+                    <div class="display-box" style="position:relative;">
+                        <video id="v1" autoplay playsinline muted
+                               style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none;"></video>
+                        <canvas id="o1" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none;"></canvas>
+                        <p id="ph1" style="color:#64748b;">Chưa bật</p>
+                    </div>
+                    <select id="sel1" class="select-cam" style="margin-top:10px;" onchange="cams.cam1.start()"></select>
+                    <div class="stats">
+                        <div class="stat"><div class="v" id="fps1">0</div><div class="l">FPS</div></div>
+                        <div class="stat"><div class="v" id="face1">0</div><div class="l">Mặt</div></div>
+                        <div class="stat"><div class="v" id="ms1">0</div><div class="l">ms</div></div>
+                    </div>
                 </div>
-                <a class="btn-link" href="/results" target="_blank">Xem kết quả train</a>
+                <!-- CAMERA 2 -->
+                <div class="card" style="flex:1 1 320px;min-width:290px;">
+                    <h3>📷 Camera 2 · <span style="color:#c084fc">Rapoo C260</span></h3>
+                    <div class="display-box" style="position:relative;">
+                        <video id="v2" autoplay playsinline muted
+                               style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none;"></video>
+                        <canvas id="o2" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none;"></canvas>
+                        <p id="ph2" style="color:#64748b;">Chưa bật</p>
+                    </div>
+                    <select id="sel2" class="select-cam" style="margin-top:10px;" onchange="cams.cam2.start()"></select>
+                    <div class="stats">
+                        <div class="stat"><div class="v" id="fps2">0</div><div class="l">FPS</div></div>
+                        <div class="stat"><div class="v" id="face2">0</div><div class="l">Mặt</div></div>
+                        <div class="stat"><div class="v" id="ms2">0</div><div class="l">ms</div></div>
+                    </div>
+                </div>
             </div>
+            <div class="btn-row" style="margin-top:14px;">
+                <button class="btn btn-green" onclick="startAll()">Bật cả 2 camera</button>
+                <button class="btn btn-red" onclick="stopAll()">Tắt hết</button>
+            </div>
+            <a class="btn-link" href="/results" target="_blank">Xem kết quả train</a>
         </div>
 
-        <!-- CỘT PHẢI: kết quả + thống kê + nhật ký + nguyên lý -->
+        <!-- CỘT PHẢI: ngưỡng + nhật ký + quản lý người -->
         <div class="right">
-            <div class="card">
-                <h3>Thống kê</h3>
-                <div class="stats">
-                    <div class="stat"><div class="v" id="st-fps">0</div><div class="l">FPS</div></div>
-                    <div class="stat"><div class="v" id="st-face">0</div><div class="l">Khuôn mặt</div></div>
-                    <div class="stat"><div class="v" id="st-ms">0</div><div class="l">ms / frame</div></div>
-                </div>
-            </div>
-
-            <div class="card">
-                <h3>Kết quả nhận diện</h3>
-                <div id="recog" class="recog">Chưa nhận diện</div>
-                <div id="det-list"><div class="empty">Chưa có khuôn mặt nào</div></div>
-            </div>
-
             <div class="card">
                 <h3>Ngưỡng nhận diện</h3>
                 <div class="slider">
@@ -189,8 +197,8 @@
                        style="width:100%;padding:8px;box-sizing:border-box;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;">
                 <datalist id="people-list"></datalist>
                 <select id="cap-role" style="width:100%;padding:8px;margin-top:8px;box-sizing:border-box;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;font-size:14px;">
-                    <option value="kĩ sư">ki su</option>
-                    <option value="sinh viên">sinh vien</option>
+                    <option value="kĩ sư">Nhân viên</option>
+                    <option value="sinh viên">Sinh viên</option>
                 </select>
                 <button class="btn" style="background:#8b5cf6;width:100%;margin-top:8px;" onclick="captureSample()">Chup mau (them vao DB)</button>
                 <div id="cap-status" style="font-size:13px;color:#94a3b8;margin-top:8px;text-align:center;">Chưa chụp mẫu nào</div>
@@ -209,193 +217,85 @@
     </div>
 
     <script>
-        let videoElement = document.getElementById('webcam-hidden');
-        let overlay      = document.getElementById('overlay');
-        let overlayCtx   = overlay.getContext('2d');
-        let placeholder  = document.getElementById('placeholder-text');
-        let statusTag    = document.getElementById('status-tag');
-        let recogBox     = document.getElementById('recog');
-        let detList      = document.getElementById('det-list');
-        let logBox       = document.getElementById('log');
-        let camSelect    = document.getElementById('cam-select');
-        let stFps  = document.getElementById('st-fps');
-        let stFace = document.getElementById('st-face');
-        let stMs   = document.getElementById('st-ms');
-        let ckSlider = document.getElementById('ck');
-        let cdSlider = document.getElementById('cd');
-        let ckVal = document.getElementById('ck-val');
-        let cdVal = document.getElementById('cd-val');
+        const $ = id => document.getElementById(id);
+        const logBox   = $('log');
+        const statusTag = $('status-tag');
+        const ckSlider = $('ck'), cdSlider = $('cd'), ckVal = $('ck-val'), cdVal = $('cd-val');
         ckSlider.oninput = () => ckVal.innerText = parseFloat(ckSlider.value).toFixed(2);
         cdSlider.oninput = () => cdVal.innerText = parseFloat(cdSlider.value).toFixed(2);
 
-        let mediaStream = null, isStreaming = false;
-        let canvas = document.createElement('canvas');
-        let frameTimes = [];        // để tính FPS
-        let lastKnownKey = null;    // tránh gửi event trùng liên tục (null = chưa khởi tạo)
-        let lastRender = 0;         // lần cập nhật panel gần nhất
-        const RENDER_MS = 1000;     // panel cập nhật mỗi 1s cho đỡ nhảy (video vẫn realtime)
+        const TRACK_INTERVAL_MS = 100;   // /track ~10fps → khung bám sát
+        const RECOG_INTERVAL_MS = 300;   // /process-frame ~3fps → nhận diện tên
+        const DRAW_INTERVAL_MS  = 66;    // vẽ khung ~15fps
+
+        // ── CHẤM CÔNG (Tuần/Tháng): người "trong phòng" = thấy ở BẤT KỲ camera nào ──
+        const camKnown = { cam1: [], cam2: [] };
+        let lastUnionKey = null;
+        async function updateAttendance(camId, known) {
+            camKnown[camId] = known;
+            const union = [...new Set([...camKnown.cam1, ...camKnown.cam2])].sort();
+            const key = union.join(',');
+            if (key === lastUnionKey) return;
+            lastUnionKey = key;
+            try { let fd = new FormData(); fd.append('current_names', union.join(','));
+                  await fetch('/log-event', { method: 'POST', body: fd }); } catch (e) {}
+        }
+
+        // ── NHẬT KÝ UI (gộp 2 camera, gắn tên camera) ──
+        function addScanLog(ev) {
+            if (logBox.querySelector('.empty')) logBox.innerHTML = '';
+            const map = { "OK": ["#4ade80","OK"], "FAIL": ["#f87171","FAIL"], "LẠ": ["#fbbf24","LẠ"] };
+            const [col, tag] = map[ev.status] || ["#94a3b8", ev.status];
+            const mv = ev.motion === "Di chuyển" ? '⇄' : '■';
+            let el = document.createElement('div'); el.className = 'log-item';
+            el.innerHTML = `<span><b style="color:${col}">[${tag}]</b> ${ev.person} `
+                + `<small style="color:#64748b">${mv} · ${ev.cam || ''}</small></span>`
+                + `<span class="t">${ev.time}</span>`;
+            logBox.prepend(el);
+            while (logBox.children.length > 120) logBox.removeChild(logBox.lastChild);
+        }
 
         window.onload = async function() {
-            loadPeople();          // tải danh sách người trong DB (thêm/xoá không cần train)
+            loadPeople();
             await getCameraList();
-            startCamera();
+            startAll();
         };
-
-        async function getCameraList() {
-            try {
-                const tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
-                tempStream.getTracks().forEach(t => t.stop());
-                const devices = await navigator.mediaDevices.enumerateDevices();
-                const cams = devices.filter(d => d.kind === 'videoinput');
-                camSelect.innerHTML = '';
-                cams.forEach((d, i) => {
-                    const o = document.createElement('option');
-                    o.value = d.deviceId; o.text = d.label || `Camera ${i + 1}`;
-                    camSelect.appendChild(o);
-                });
-                let idx = cams.findIndex(d => d.label.toLowerCase().includes('ugreen') || d.label.toLowerCase().includes('usb'));
-                if (idx !== -1) camSelect.selectedIndex = idx;
-                else if (cams.length > 1) camSelect.selectedIndex = cams.length - 1;
-            } catch (err) { console.error("Lỗi lấy thiết bị Cam:", err); }
-        }
-
-        async function startCamera() {
-            stopCameraTracks();
-            const deviceId = camSelect.value;
-            const constraints = { video: deviceId ? { deviceId: deviceId } : true };
-            try {
-                mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-                videoElement.srcObject = mediaStream;
-                isStreaming = true;
-                videoElement.style.display = 'block';
-                placeholder.style.display = 'none';
-                setStatus("Camera đang chạy...", "#166534", "#4ade80");
-                frameTimes = [];
-                latestBoxes = [];
-                trackLoop();        // khung nhanh (YOLO ~5fps) — bám sát, mất nhanh khi rời
-                recogLoop();        // tên (ArcFace, thưa)
-                drawOverlayLoop();  // vẽ khung lên overlay
-            } catch (err) {
-                setStatus("Lỗi cấp quyền Cam!", "#991b1b", "#f87171");
-                alert("Lỗi mở Cam: " + err.message + "\nHãy kiểm tra biểu tượng Camera trên thanh địa chỉ đã chọn Allow chưa!");
-            }
-        }
-
-        function switchCamera() { if (isStreaming) startCamera(); }
-
-        function stopCameraTracks() {
-            isStreaming = false;
-            if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
-        }
-
-        function stopCamera() {
-            stopCameraTracks();
-            videoElement.style.display = 'none';
-            latestBoxes = [];
-            overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
-            placeholder.innerText = "Camera đã tắt";
-            placeholder.style.display = 'block';
-            setStatus("Camera đã tắt", "#991b1b", "#f87171");
-            recogBox.className = "recog"; recogBox.innerText = "Chưa nhận diện";
-            detList.innerHTML = '<div class="empty">Chưa có khuôn mặt nào</div>';
-            stFps.innerText = stFace.innerText = stMs.innerText = '0';
-        }
 
         function setStatus(txt, bg, fg) {
             statusTag.innerText = txt; statusTag.style.background = bg; statusTag.style.color = fg;
         }
 
-        // Màu theo confidence: cao=xanh, vừa=vàng, thấp=đỏ
-        function confColor(c, stranger) {
-            if (stranger) return '#ef4444';
-            if (c >= 0.75) return '#22c55e';
-            if (c >= 0.6)  return '#84cc16';
-            return '#eab308';
-        }
-
-        function renderResults(data) {
-            let dets = data.detections || [];
-
-            // 1) Banner tổng
-            let known = data.known || [];
-            if (data.stranger) {
-                let extra = known.length ? " (kèm: " + known.join(", ") + ")" : "";
-                recogBox.className = "recog alert";
-                recogBox.innerText = "NGƯỜI LẠ!" + extra;
-            } else if (known.length) {
-                recogBox.className = "recog ok";
-                recogBox.innerText = "Đã nhận diện: " + known.join(", ");
-            } else {
-                recogBox.className = "recog";
-                recogBox.innerText = "Không phát hiện khuôn mặt";
-            }
-
-            // 2) Danh sách từng mặt + thanh confidence
-            if (dets.length) {
-                detList.innerHTML = dets.map(d => {
-                    let pct = Math.round(d.conf * 100);
-                    let col = confColor(d.conf, d.stranger);
-                    return `<div class="det">
-                        <div class="det-row"><span class="det-name" style="color:${col}">${d.name}</span><span>${pct}%</span></div>
-                        <div class="bar"><span style="width:${pct}%;background:${col}"></span></div>
-                    </div>`;
-                }).join('');
-            } else {
-                detList.innerHTML = '<div class="empty">Chưa có khuôn mặt nào</div>';
-            }
-
-            // 3) Thống kê
-            stFace.innerText = data.count || 0;
-            stMs.innerText = data.infer_ms != null ? data.infer_ms : 0;
-
-            // 4) Gửi danh sách người quen lên backend (feed sheet Tuần/Tháng vào/ra)
-            let knownKey = known.slice().sort().join(",");
-            if (knownKey !== lastKnownKey) {
-                lastKnownKey = knownKey;
-                postLogEvent(known);
-            }
-            // Nhật ký UI giờ do scan_events (OK/FAIL/LẠ) điều khiển — xem addScanLog().
-        }
-
-        // Nhật ký UI: mỗi sự kiện quét OK/FAIL/LẠ 1 dòng (khớp sheet Ngày của Excel)
-        function addScanLog(ev) {
-            if (logBox.querySelector('.empty')) logBox.innerHTML = '';
-            const map = {
-                "OK":   ["#4ade80", "OK"],
-                "FAIL": ["#f87171", "FAIL"],
-                "LẠ":   ["#fbbf24", "LẠ"],
-            };
-            const [col, tag] = map[ev.status] || ["#94a3b8", ev.status];
-            const mv = ev.motion === "Di chuyển"
-                ? '<span style="color:#38bdf8">⇄ di chuyển</span>'
-                : '<span style="color:#64748b">■ đứng im</span>';
-            let el = document.createElement('div');
-            el.className = 'log-item';
-            el.innerHTML = `<span><b style="color:${col}">[${tag}]</b> ${ev.person} `
-                         + `<small>(${mv})</small></span><span class="t">${ev.time}</span>`;
-            logBox.prepend(el);
-            while (logBox.children.length > 100) logBox.removeChild(logBox.lastChild);
-        }
-
-        async function postLogEvent(knownNames) {
+        async function getCameraList() {
             try {
-                let fd = new FormData();
-                fd.append('current_names', knownNames.join(','));
-                await fetch('/log-event', { method: 'POST', body: fd });
-            } catch(e) { /* silent */ }
-        }
-
-        async function setDetector(mode) {
-            try {
-                let fd = new FormData();
-                fd.append('mode', mode);
-                let res = await fetch('/set-detector', { method: 'POST', body: fd });
-                let d = await res.json();
-                if (d.ok) {
-                    setStatus(`Detector: ${mode === 'scrfd' ? 'SCRFD (mọi người)' : 'YOLO (nhanh)'}`, "#0f172a", "#38bdf8");
-                    setTimeout(() => setStatus("Camera đang chạy...", "#166534", "#4ade80"), 2000);
+                const tmp = await navigator.mediaDevices.getUserMedia({ video: true });
+                tmp.getTracks().forEach(t => t.stop());
+                const devs = (await navigator.mediaDevices.enumerateDevices())
+                                 .filter(d => d.kind === 'videoinput');
+                for (const sel of [$('sel1'), $('sel2')]) {
+                    sel.innerHTML = '';
+                    devs.forEach((d, i) => {
+                        const o = document.createElement('option');
+                        o.value = d.deviceId; o.text = d.label || ('Camera ' + (i + 1));
+                        sel.appendChild(o);
+                    });
                 }
-            } catch(e) { /* silent */ }
+                // tự chọn: Camera 1 = UGreen, Camera 2 = Rapoo/C260 (nếu nhận ra tên)
+                const iU = devs.findIndex(d => /ugreen/i.test(d.label));
+                const iR = devs.findIndex(d => /rapoo|c260/i.test(d.label));
+                if (iU >= 0) $('sel1').selectedIndex = iU;
+                if (iR >= 0) $('sel2').selectedIndex = iR;
+                else if (devs.length > 1 && $('sel2').selectedIndex === $('sel1').selectedIndex)
+                    $('sel2').selectedIndex = ($('sel1').selectedIndex + 1) % devs.length;
+            } catch (err) { console.error("Lỗi liệt kê camera:", err); }
+        }
+
+        function startAll() {
+            cams.cam1.start(); cams.cam2.start();
+            setStatus("2 camera đang chạy...", "#166534", "#4ade80");
+        }
+        function stopAll() {
+            cams.cam1.stop(); cams.cam2.stop();
+            setStatus("Đã tắt camera", "#991b1b", "#f87171");
         }
 
         // ── Quản lý người: tải danh sách, hiện chip + nút xoá, đổ vào datalist ──
@@ -415,8 +315,8 @@
                     </span>
                     <select onchange="updateRole('${p.name}', this.value)" title="Đổi role"
                         style="background:#1e293b;color:#e2e8f0;border:1px solid #475569;border-radius:5px;padding:3px 6px;font-size:12px;cursor:pointer;">
-                        <option value="kỹ sư"    ${p.role === 'kỹ sư'    ? 'selected' : ''}>Ky su</option>
-                        <option value="sinh viên" ${p.role === 'sinh viên' ? 'selected' : ''}>Sinh vien</option>
+                        <option value="kỹ sư"    ${p.role === 'kỹ sư'    ? 'selected' : ''}>Nhân viên</option>
+                        <option value="sinh viên" ${p.role === 'sinh viên' ? 'selected' : ''}>Sinh viên</option>
                     </select>
                     <button onclick="removePerson('${p.name}')" title="Xoa nguoi nay"
                         style="background:#7f1d1d;color:#fecaca;border:none;border-radius:5px;padding:3px 9px;cursor:pointer;font-size:13px;flex-shrink:0;">X</button>
@@ -454,27 +354,28 @@
         }
 
         async function captureSample() {
-            if (!isStreaming) { alert("Bật camera trước đã."); return; }
-            let person = document.getElementById('cap-person').value;
-            let statusEl = document.getElementById('cap-status');
-            statusEl.style.color = '#94a3b8';
-            statusEl.innerText = 'Đang lưu...';
-            canvas.width  = videoElement.videoWidth  || 640;
-            canvas.height = videoElement.videoHeight || 480;
-            canvas.getContext('2d').drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-            canvas.toBlob(async function(blob) {
+            // chụp mẫu từ camera đang bật (ưu tiên Camera 1)
+            const cam = cams.cam1.on ? cams.cam1 : (cams.cam2.on ? cams.cam2 : null);
+            if (!cam) { alert("Bật camera trước đã."); return; }
+            let person = $('cap-person').value;
+            let statusEl = $('cap-status');
+            statusEl.style.color = '#94a3b8'; statusEl.innerText = 'Đang lưu...';
+            const cvs = document.createElement('canvas');
+            cvs.width  = cam.video.videoWidth  || 640;
+            cvs.height = cam.video.videoHeight || 480;
+            cvs.getContext('2d').drawImage(cam.video, 0, 0, cvs.width, cvs.height);
+            cvs.toBlob(async function(blob) {
                 let fd = new FormData();
                 fd.append('file', blob, 'cap.jpg');
                 fd.append('person', person);
-                fd.append('role', document.getElementById('cap-role').value);
+                fd.append('role', $('cap-role').value);
                 try {
-                    let res = await fetch('/capture', { method: 'POST', body: fd });
-                    let d = await res.json();
+                    let d = await (await fetch('/capture', { method: 'POST', body: fd })).json();
                     if (d.ok) {
                         statusEl.style.color = '#4ade80';
                         statusEl.innerText = (d.is_new ? `Đã tạo người mới "${person}"! ` : '')
                                            + `${person}: ${d.count} mẫu (tổng ${d.total})`;
-                        renderPeople(d.people);   // cập nhật danh sách ngay
+                        renderPeople(d.people);
                     } else {
                         statusEl.style.color = '#f87171';
                         statusEl.innerText = (d.msg || 'Lỗi');
@@ -486,132 +387,120 @@
             }, 'image/jpeg', 0.92);
         }
 
-        // ── KIẾN TRÚC 2 VÒNG: KHUNG NHANH + TÊN THƯA ───────────────────────
-        //  • <video> phát trực tiếp → mượt.
-        //  • trackLoop  → /track (CHỈ YOLO ~50ms) ~5fps: khung bám sát, rời khung
-        //    hình là MẤT trong ~250ms (không phải chờ ArcFace).
-        //  • recogLoop  → /process-frame (ArcFace) THƯA hơn: cập nhật TÊN + panel;
-        //    server nhớ nhãn theo vị trí để /track gắn tên vào khung.
-        //  • drawOverlayLoop → vẽ khung từ latestBoxes.
-        let processingFrame = false;   // /process-frame đang chạy
-        let trackBusy = false;         // /track đang chạy
-        let latestBoxes = [];          // khung mới nhất (từ /track)
-        let detImgW = 640, detImgH = 480;
-        let lastTrackMs = 0, lastRecogMs = 0, lastDraw = 0;
-        const TRACK_INTERVAL_MS = 100;   // /track ~10fps → khung bám sát khi di chuyển
-        const RECOG_INTERVAL_MS = 300;   // /process-frame ~3fps → nhận diện tên
-        const DRAW_INTERVAL_MS  = 66;    // vẽ khung ~15fps
-        let trackCanvas = document.createElement('canvas');   // canvas riêng, nhỏ, cho /track
-
-        // Chụp 1 frame (tùy chọn thu nhỏ về maxW cho nhanh). maxW=0 → giữ nguyên độ nét.
-        function grabScaled(cvs, maxW, quality, cb) {
-            let vw = videoElement.videoWidth, vh = videoElement.videoHeight;
-            if (!vw) { cb(null); return; }
-            let scale = (maxW && vw > maxW) ? maxW / vw : 1;
-            let w = Math.round(vw * scale), h = Math.round(vh * scale);
-            cvs.width = w; cvs.height = h;
-            cvs.getContext('2d').drawImage(videoElement, 0, 0, w, h);
-            cvs.toBlob(cb, 'image/jpeg', quality);
-        }
-
-        // VÒNG KHUNG NHANH — chỉ YOLO, cho khung bám sát thời gian thực
-        function trackLoop() {
-            if (!isStreaming) return;
-            requestAnimationFrame(trackLoop);
-            let now = performance.now();
-            if (trackBusy || now - lastTrackMs < TRACK_INTERVAL_MS || !videoElement.videoWidth) return;
-            lastTrackMs = now; trackBusy = true;
-            // ảnh NHỎ (≤480px) + nén mạnh → /track nhanh, khung bám sát khi di chuyển
-            grabScaled(trackCanvas, 480, 0.5, async function(blob) {
-                if (!blob || !isStreaming) { trackBusy = false; return; }
-                let fd = new FormData();
-                fd.append('file', blob, 'f.jpg');
-                fd.append('conf_detect', cdSlider.value);
+        // ── LỚP CAMERA: mỗi camera 1 luồng ĐỘC LẬP (khung nhanh + tên thưa) ──
+        //  • trackLoop  → /track (YOLO) ~10fps: khung bám sát; gửi kèm 'cam' id.
+        //  • recogLoop  → /process-frame (ArcFace) thưa: cập nhật tên + log; server tách state theo cam.
+        //  • drawLoop   → vẽ khung lên overlay của chính camera đó.
+        class Cam {
+            constructor(id, video, overlay, sel, ph, fps, face, ms) {
+                this.id = id; this.video = video; this.overlay = overlay;
+                this.octx = overlay.getContext('2d');
+                this.select = sel; this.ph = ph; this.fpsEl = fps; this.faceEl = face; this.msEl = ms;
+                this.stream = null; this.on = false;
+                this.tc = document.createElement('canvas'); this.rc = document.createElement('canvas');
+                this.boxes = []; this.detW = 640; this.detH = 480;
+                this.trackBusy = false; this.recogBusy = false;
+                this.lastTrack = 0; this.lastRecog = 0; this.lastDraw = 0; this.dynRecog = RECOG_INTERVAL_MS;
+                this.frameTimes = [];
+            }
+            async start() {
+                this.stop();
+                const dev = this.select.value;
                 try {
-                    let data = await (await fetch('/track', { method: 'POST', body: fd })).json();
-                    latestBoxes = data.detections || [];
-                    detImgW = data.img_w || 640;
-                    detImgH = data.img_h || 480;
-                    // FPS = nhịp cập nhật khung (/track)
-                    let t = performance.now();
-                    frameTimes.push(t);
-                    while (frameTimes.length && t - frameTimes[0] > 1000) frameTimes.shift();
-                    stFps.innerText = frameTimes.length;
-                } catch (e) { /* silent */ } finally { trackBusy = false; }
-            });
-        }
-
-        // VÒNG NHẬN DIỆN TÊN — ArcFace, gọi thưa (danh tính không đổi nhanh).
-        // Tự GIÃN NHỊP theo độ trễ thực: máy chậm → nhận diện thưa hơn → nhường CPU cho khung.
-        let dynRecogInterval = RECOG_INTERVAL_MS;
-        function recogLoop() {
-            if (!isStreaming) return;
-            requestAnimationFrame(recogLoop);
-            let now = performance.now();
-            if (processingFrame || now - lastRecogMs < dynRecogInterval || !videoElement.videoWidth) return;
-            lastRecogMs = now; processingFrame = true;
-            let t0 = now;
-            // ƯU TIÊN CHÍNH XÁC: ảnh nhận diện ≤1920 (mặt nét hơn → ArcFace ít nhầm hơn)
-            grabScaled(canvas, 1920, 0.82, async function(blob) {
-                if (!blob || !isStreaming) { processingFrame = false; return; }
-                let fd = new FormData();
-                fd.append('file', blob, 'f.jpg');
-                fd.append('conf_known', ckSlider.value);
-                fd.append('conf_detect', cdSlider.value);
-                try {
-                    let data = await (await fetch('/process-frame', { method: 'POST', body: fd })).json();
-                    (data.scan_events || []).forEach(addScanLog);   // ghi nhật ký UI ngay
-                    let t = performance.now();
-                    // giãn nhịp: lần sau chờ >= 1.8× thời gian nhận diện vừa rồi (tối thiểu mặc định)
-                    dynRecogInterval = Math.max(RECOG_INTERVAL_MS, (t - t0) * 1.8);
-                    if (t - lastRender >= RENDER_MS) { renderResults(data); lastRender = t; }
-                } catch (e) { /* silent */ } finally { processingFrame = false; }
-            });
-        }
-
-        // VÒNG VẼ KHUNG — tô latestBoxes lên overlay
-        function drawOverlayLoop() {
-            if (!isStreaming) return;
-            requestAnimationFrame(drawOverlayLoop);
-            let tnow = performance.now();
-            if (tnow - lastDraw < DRAW_INTERVAL_MS) return;
-            lastDraw = tnow;
-
-            const vw = videoElement.videoWidth || 640;
-            const vh = videoElement.videoHeight || 480;
-            if (overlay.width !== vw)  overlay.width  = vw;
-            if (overlay.height !== vh) overlay.height = vh;
-            overlayCtx.clearRect(0, 0, vw, vh);
-
-            const sx = vw / detImgW, sy = vh / detImgH;
-            for (const d of latestBoxes) {
-                if (!d.box) continue;
-                let [x1, y1, x2, y2] = d.box;
-                x1 *= sx; x2 *= sx; y1 *= sy; y2 *= sy;
-                const pct = Math.round((d.conf || 0) * 100);
-                const mv = d.moving ? ' ⇄' : '';   // ⇄ = di chuyển, trống = đứng im
-                let col, label;
-                if (d.pending) {            // chưa nhận diện kịp → xám, không kết luận
-                    col = '#94a3b8'; label = '…';
-                } else if (d.stranger) {
-                    col = '#ef4444'; label = `NGƯỜI LẠ ${pct}%${mv}`;
-                } else {
-                    col = '#22c55e'; label = `${d.name} ${pct}%${mv}`;
+                    this.stream = await navigator.mediaDevices.getUserMedia(
+                        { video: dev ? { deviceId: { exact: dev } } : true });
+                    this.video.srcObject = this.stream;
+                    this.video.style.display = 'block'; this.ph.style.display = 'none';
+                    this.on = true; this.frameTimes = []; this.boxes = [];
+                    this.trackLoop(); this.recogLoop(); this.drawLoop();
+                } catch (e) {
+                    this.ph.style.display = 'block'; this.ph.innerText = 'Lỗi mở camera';
+                    console.error(this.id, e);
                 }
-
-                overlayCtx.lineWidth = Math.max(2, vw / 320);
-                overlayCtx.strokeStyle = col;
-                overlayCtx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-
-                overlayCtx.font = `bold ${Math.max(14, vw / 40)}px 'Segoe UI', sans-serif`;
-                const tw = overlayCtx.measureText(label).width;
-                const th = Math.max(18, vw / 32);
-                overlayCtx.fillStyle = col;
-                overlayCtx.fillRect(x1, y1 - th, tw + 10, th);
-                overlayCtx.fillStyle = '#fff';
-                overlayCtx.fillText(label, x1 + 5, y1 - th * 0.28);
+            }
+            stop() {
+                this.on = false;
+                if (this.stream) this.stream.getTracks().forEach(t => t.stop());
+                this.boxes = []; this.octx.clearRect(0, 0, this.overlay.width, this.overlay.height);
+                this.video.style.display = 'none'; this.ph.style.display = 'block'; this.ph.innerText = 'Đã tắt';
+                this.fpsEl.innerText = this.faceEl.innerText = this.msEl.innerText = '0';
+                camKnown[this.id] = [];
+            }
+            grab(cvs, maxW, q, cb) {
+                let vw = this.video.videoWidth, vh = this.video.videoHeight;
+                if (!vw) { cb(null); return; }
+                let s = (maxW && vw > maxW) ? maxW / vw : 1, w = Math.round(vw * s), h = Math.round(vh * s);
+                cvs.width = w; cvs.height = h; cvs.getContext('2d').drawImage(this.video, 0, 0, w, h);
+                cvs.toBlob(cb, 'image/jpeg', q);
+            }
+            trackLoop() {
+                if (!this.on) return; requestAnimationFrame(() => this.trackLoop());
+                let now = performance.now();
+                if (this.trackBusy || now - this.lastTrack < TRACK_INTERVAL_MS || !this.video.videoWidth) return;
+                this.lastTrack = now; this.trackBusy = true;
+                this.grab(this.tc, 480, 0.5, async blob => {
+                    if (!blob || !this.on) { this.trackBusy = false; return; }
+                    let fd = new FormData(); fd.append('file', blob, 'f.jpg');
+                    fd.append('conf_detect', cdSlider.value); fd.append('cam', this.id);
+                    try {
+                        let data = await (await fetch('/track', { method: 'POST', body: fd })).json();
+                        this.boxes = data.detections || []; this.detW = data.img_w || 640; this.detH = data.img_h || 480;
+                        let t = performance.now(); this.frameTimes.push(t);
+                        while (this.frameTimes.length && t - this.frameTimes[0] > 1000) this.frameTimes.shift();
+                        this.fpsEl.innerText = this.frameTimes.length;
+                    } catch (e) {} finally { this.trackBusy = false; }
+                });
+            }
+            recogLoop() {
+                if (!this.on) return; requestAnimationFrame(() => this.recogLoop());
+                let now = performance.now();
+                if (this.recogBusy || now - this.lastRecog < this.dynRecog || !this.video.videoWidth) return;
+                this.lastRecog = now; this.recogBusy = true; let t0 = now;
+                this.grab(this.rc, 1920, 0.82, async blob => {
+                    if (!blob || !this.on) { this.recogBusy = false; return; }
+                    let fd = new FormData(); fd.append('file', blob, 'f.jpg');
+                    fd.append('conf_known', ckSlider.value); fd.append('conf_detect', cdSlider.value); fd.append('cam', this.id);
+                    try {
+                        let data = await (await fetch('/process-frame', { method: 'POST', body: fd })).json();
+                        (data.scan_events || []).forEach(addScanLog);
+                        this.faceEl.innerText = data.count || 0;
+                        this.msEl.innerText = data.infer_ms != null ? data.infer_ms : 0;
+                        updateAttendance(this.id, data.known || []);
+                        let t = performance.now(); this.dynRecog = Math.max(RECOG_INTERVAL_MS, (t - t0) * 1.8);
+                    } catch (e) {} finally { this.recogBusy = false; }
+                });
+            }
+            drawLoop() {
+                if (!this.on) return; requestAnimationFrame(() => this.drawLoop());
+                let tnow = performance.now(); if (tnow - this.lastDraw < DRAW_INTERVAL_MS) return; this.lastDraw = tnow;
+                const vw = this.video.videoWidth || 640, vh = this.video.videoHeight || 480;
+                if (this.overlay.width !== vw) this.overlay.width = vw;
+                if (this.overlay.height !== vh) this.overlay.height = vh;
+                const ctx = this.octx; ctx.clearRect(0, 0, vw, vh);
+                const sx = vw / this.detW, sy = vh / this.detH;
+                for (const d of this.boxes) {
+                    if (!d.box) continue;
+                    let [x1, y1, x2, y2] = d.box; x1 *= sx; x2 *= sx; y1 *= sy; y2 *= sy;
+                    const pct = Math.round((d.conf || 0) * 100), mv = d.moving ? ' ⇄' : '';
+                    let col, label;
+                    if (d.pending) { col = '#94a3b8'; label = '…'; }
+                    else if (d.stranger) { col = '#ef4444'; label = `NGƯỜI LẠ ${pct}%${mv}`; }
+                    else { col = '#22c55e'; label = `${d.name} ${pct}%${mv}`; }
+                    ctx.lineWidth = Math.max(2, vw / 320); ctx.strokeStyle = col;
+                    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+                    ctx.font = `bold ${Math.max(14, vw / 40)}px 'Segoe UI', sans-serif`;
+                    const tw = ctx.measureText(label).width, th = Math.max(18, vw / 32);
+                    ctx.fillStyle = col; ctx.fillRect(x1, y1 - th, tw + 10, th);
+                    ctx.fillStyle = '#fff'; ctx.fillText(label, x1 + 5, y1 - th * 0.28);
+                }
             }
         }
+
+        // 2 camera (đặt lên window để onclick trong HTML gọi được)
+        window.cams = {
+            cam1: new Cam('cam1', $('v1'), $('o1'), $('sel1'), $('ph1'), $('fps1'), $('face1'), $('ms1')),
+            cam2: new Cam('cam2', $('v2'), $('o2'), $('sel2'), $('ph2'), $('fps2'), $('face2'), $('ms2')),
+        };
     </script>
 </body>
 </html>
