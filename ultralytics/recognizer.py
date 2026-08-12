@@ -175,6 +175,58 @@ class FaceRecognizer:
             self.db_embs, self.db_owner = None, None
         return True
 
+    def remove_embedding(self, name, local_index):
+        """Xoá 1 MẪU cụ thể (embedding thứ local_index, 0-based, theo thứ tự lưu) của 'name'.
+        Dùng khi enroll NHẦM 1 ảnh (vd ảnh son gắn nhầm tên tri) — không mất các mẫu đúng còn lại.
+        True nếu xoá được. Hết mẫu → xoá luôn người (như remove_person)."""
+        if name not in self.db_names or self.db_embs is None:
+            return False
+        idx = self.db_names.index(name)
+        rows = (self.db_owner == idx).nonzero(as_tuple=True)[0]
+        if not (0 <= local_index < len(rows)):
+            return False
+        keep = torch.ones(self.db_embs.shape[0], dtype=torch.bool)
+        keep[int(rows[local_index])] = False
+        self.db_embs, self.db_owner = self.db_embs[keep], self.db_owner[keep]
+        if int((self.db_owner == idx).sum()) == 0:
+            self.remove_person(name)
+        return True
+
+    def sample_diagnostics(self, name):
+        """Với mỗi mẫu của 'name': điểm TỰ-KHỚP (cosine với các mẫu CÒN LẠI của chính người đó,
+        bỏ qua chính nó) + người GIỐNG NHẤT trong số người KHÁC + điểm đó. Mẫu enroll NHẦM
+        (ảnh người khác gắn nhầm tên) thường tự-khớp THẤP và khớp cao bất thường với đúng
+        người bị chụp nhầm — nhìn vào đây là lộ ra ngay không cần xem lại ảnh (DB không lưu ảnh).
+        Trả list {index, self_sim, closest_other, closest_score}, sắp tự-khớp TĂNG DẦN (nghi ngờ
+        nhất lên đầu). index dùng trực tiếp cho remove_embedding()."""
+        if name not in self.db_names or self.db_embs is None:
+            return []
+        idx = self.db_names.index(name)
+        mask = self.db_owner == idx
+        rows = mask.nonzero(as_tuple=True)[0]
+        if len(rows) == 0:
+            return []
+        own = self.db_embs[rows]
+        other_mask  = ~mask
+        other_embs  = self.db_embs[other_mask]
+        other_owner = self.db_owner[other_mask]
+        out = []
+        for local_i in range(own.shape[0]):
+            if own.shape[0] > 1:
+                rest = torch.cat([own[:local_i], own[local_i + 1:]], 0)
+                self_sim = float((rest @ own[local_i]).mean())
+            else:
+                self_sim = 1.0   # mẫu duy nhất, không có gì để so
+            closest_other, closest_score = None, None
+            if other_embs.shape[0] > 0:
+                sims = other_embs @ own[local_i]
+                j = int(sims.argmax())
+                closest_other, closest_score = self.db_names[int(other_owner[j])], round(float(sims[j]), 3)
+            out.append({"index": local_i, "self_sim": round(self_sim, 3),
+                        "closest_other": closest_other, "closest_score": closest_score})
+        out.sort(key=lambda d: d["self_sim"])
+        return out
+
     def people_summary(self):
         """List {name, role, count} theo db_names — để web hiện danh sách người + số mẫu."""
         return [{"name": n,

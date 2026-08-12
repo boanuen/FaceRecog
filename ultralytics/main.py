@@ -58,6 +58,47 @@ _scan_log: list[dict] = []   # mỗi entry kèm "cam" (camera nào sinh ra sự 
 # 2 camera = 2 luồng độc lập → state tracking RIÊNG cho mỗi cam (mặt cam1 không lẫn cam2).
 CAMERAS = {"cam1": "UGreen 2K", "cam2": "Rapoo C260"}   # id → tên hiển thị
 
+# ── SIẾT NHẬN DIỆN RIÊNG TỪNG CAMERA (chống NHẬN SAI) ──
+# Rapoo C260 (cam2) cho ảnh MỀM/NHIỄU hơn UGreen 2K → cosine "lưng chừng" nhiều → dễ gán
+# NHẦM tên (người A thành B) hoặc nhận bừa người lạ. Với cam đó, siết chặt hơn cam1:
+#   thr_bump : CỘNG thêm vào ngưỡng cosine người-quen (chỉ nhận khi thật giống).
+#   margin   : top-1 phải hơn top-2 ÍT NHẤT chừng này; sát nhau → coi frame CHƯA CHẮC
+#              (để bộ làm mượt tự quyết), đây là đòn chính chống nhầm 2 người quen với nhau.
+#
+# HỆ SỐ cam2 suy từ chênh THÔNG SỐ so với UGreen 2K (không đoán mò):
+#   EQI = (1/FOV)·focus·hdr    focus: AF=1.0 / fixed=0.85   hdr: có=1.0 / không=0.90
+#     UGreen(nền) = (1/80)·1.00·1.00 = 0.01250   [4MP, 2K, AF, HDR]
+#     Rapoo       = (1/95)·0.85·0.90 = 0.00805   [2MP, 1080p, fixed-focus, không HDR, góc 95°]
+#   Q = 1.55 → Rapoo mất ~36% chất lượng hiệu dụng.
+#   bump = deficit(0.36) × headroom(~0.20) ≈ 0.07 ;  margin ≈ 0.7·bump ≈ 0.05.
+# cam1 để 0/0 → GIỮ NGUYÊN hành vi cũ. Đây là điểm KHỞI ĐẦU có căn cứ — vẫn nên soi Excel
+# "người lạ/fail" rồi nhích nếu còn nhầm (tăng) hay bị miss người thật (giảm).
+CAM_TUNE = {
+    "cam1": {"thr_bump": 0.00, "margin": 0.00},
+    "cam2": {"thr_bump": 0.07, "margin": 0.05},
+}
+
+# ── BÙ ẢNH MỀM/THIẾU SÁNG (chỉ cam thiếu AF/HDR — KHÔNG đụng vùng nhìn) ──
+# Rapoo không HDR (dễ cháy/tối chỗ sáng-tối lệch, nhất là lắp trên cao chiếu xuống → trán
+# sáng, phần dưới mặt tối) + fixed-focus (ảnh mềm hơn AF). Bù trực tiếp lên ẢNH GỐC ĐẦY ĐỦ
+# (không crop — giữ nguyên toàn bộ khung nhìn) TRƯỚC khi đưa vào YOLO **và** ArcFace, nên
+# tác động thẳng vào pixel mà ArcFace thực sự tạo embedding — khác lần crop trước (crop chỉ
+# đổi input YOLO, không hề chạm tới ArcFace vì ArcFace tự cắt lại từ ảnh gốc).
+#   CLAHE (kênh L của LAB) → cân sáng CỤC BỘ, bù thiếu HDR.
+#   Unsharp mask nhẹ       → bù mềm do fixed-focus.
+# cam1 đã có AF+HDR phần cứng lo rồi → False, không xử lý thêm (tránh xử lý dư làm hại ảnh tốt).
+CAM_ENHANCE = {"cam1": False, "cam2": True}
+_clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
+def _enhance(img, cam):
+    if not CAM_ENHANCE.get(cam, False):
+        return img
+    l, a, b = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2LAB))
+    l = _clahe.apply(l)
+    img = cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
+    blur = cv2.GaussianBlur(img, (0, 0), 3)
+    return cv2.addWeighted(img, 1.35, blur, -0.35, 0)   # unsharp mask nhẹ, tránh tạo nhiễu/viền giả
+
 class CamState:
     def __init__(self):
         self.tracks = []              # track của riêng camera này
@@ -281,10 +322,15 @@ async def process_frame(
     img   = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
         return JSONResponse({"status": "error", "message": "Invalid image"}, status_code=400)
+    img = _enhance(img, cam)   # bù mềm/thiếu sáng cho cam thiếu AF/HDR (xem CAM_ENHANCE)
 
     # kẹp giá trị hợp lệ để tránh web gửi số vô lý
     conf_detect = min(max(conf_detect, 0.05), 0.9)
     threshold   = min(max(conf_known, 0.05), 0.95)   # conf_known giờ là ngưỡng cosine
+    # siết riêng theo camera: cam2 (Rapoo) ảnh mềm → ngưỡng cao hơn + đòi khoảng cách top1/top2
+    tune     = CAM_TUNE.get(cam, CAM_TUNE["cam1"])
+    threshold = min(threshold + tune["thr_bump"], 0.95)
+    margin    = tune["margin"]
 
     st = _cam_states[cam]                 # state tracking riêng của camera này
     rec.det_conf = conf_detect
@@ -318,9 +364,14 @@ async def process_frame(
         for j, k in enumerate(keep):
             ranked = rec._rank(emb[j])
             if ranked:
+                top_name, top_score = ranked[0]
+                run_score = ranked[1][1] if len(ranked) > 1 else 0.0
                 runner = ({"name": ranked[1][0], "score": round(ranked[1][1], 3)}
                           if len(ranked) > 1 else None)
-                got[k] = (ranked[0][0], round(ranked[0][1], 3), runner)
+                # margin gate: top-1 sát top-2 → NHẬP NHẰNG 2 người quen, bỏ tên (best_name=None)
+                # để frame này thành phiếu "chưa chắc"; bộ làm mượt cần đa số frame chắc mới gán.
+                name = None if (top_score - run_score) < margin else top_name
+                got[k] = (name, round(top_score, 3), runner)
         for pos, i in enumerate(need):
             x1, y1, x2, y2 = boxes[i][:4]
             info = got.get(pos)
@@ -329,7 +380,8 @@ async def process_frame(
             else:
                 bn, bs, runner = info
                 faces[i] = {"box": (x1, y1, x2, y2), "best_name": bn, "score": bs, "runner": runner}
-                if trk_of[i] is not None:            # nhớ đã ArcFace → lần sau dùng lại
+
+                if trk_of[i] is not None:
                     trk_of[i]["arc_time"] = now_dt
                     trk_of[i]["arc_score"] = bs
     faces = [f for f in faces if f is not None]
@@ -347,7 +399,7 @@ async def process_frame(
     detections = []
 
     # Chỉ TRẢ TOẠ ĐỘ KHUNG (client tự vẽ overlay lên video) — không encode ảnh
-    # → nhẹ băng thông, không nhấp nháy, detect nhanh hơn (bỏ imencode + base64).
+    # → nhẹ băng thông, detect nhanh hơn (bỏ imencode + base64).
     for f, (vname, vscore) in zip(faces, voted):
         x1, y1, x2, y2 = f["box"]
         runner = f.get("runner")
@@ -391,11 +443,13 @@ async def track_faces(
 
     rec.det_conf = min(max(conf_detect, 0.05), 0.9)
     loop = asyncio.get_event_loop()
-    # YOLO ở imgsz nhỏ → nhanh hơn nhiều trên CPU → khung bám sát ngay cả máy yếu
+    H, W = img.shape[:2]
+    # /track chạy nhanh ~10fps chỉ để bám khung (tên lấy từ cache) → KHÔNG áp _enhance ở đây, đỡ tốn CPU thêm ở vòng lặp tần suất cao; nhận dạng thật
+    # (nơi _enhance có tác dụng) nằm ở /process-frame.
+    # YOLO ở imgsz nhỏ → nhanh hơn nhiều trên CPU
     boxes = await loop.run_in_executor(executor, lambda: rec.detect(img, imgsz=TRACK_IMGSZ))
 
     st = _cam_states[cam]                 # state tracking riêng của camera này
-    H, W = img.shape[:2]
     match_thr = _match_thr()
     now = datetime.now()
     _prune_tracks(st, now)   # dọn track cũ TRƯỚC khi ghép
@@ -419,7 +473,7 @@ async def track_faces(
         t["moving"] = _is_moving(t["pos"], wsn)
 
         lab = t["label"]
-        if not t["hist"]:                 # chưa nhận diện lần nào → xám "…"
+        if not t["hist"]:                 
             name, score, stranger, pending = "…", 0.0, False, True
         elif lab == "LẠ":
             name, score, stranger, pending = "Người lạ", t["hist"][-1][1], True, False
@@ -435,11 +489,7 @@ async def track_faces(
 
 @app.post("/capture")
 async def capture(file: UploadFile = File(...), person: str = Form(...), role: str = Form("kỹ sư")):
-    """ENROLL trực tiếp từ webcam: lấy mặt to nhất → ArcFace embedding → thêm vào DB.
-
-    KHÔNG train lại. 'person' có thể là tên MỚI (tự tạo người mới) hoặc người đã có.
-    Ảnh webcam thật nạp thẳng vào DB → đóng khoảng cách train/thực-tế. Ghi đè face_db.pt.
-    """
+    """Thêm 1 mẫu ảnh vào DB (không cần train lại). Ghi ra face_db.pt."""
     person = (person or "").strip()
     if not person:
         return JSONResponse({"ok": False, "msg": "Chưa nhập tên người"}, status_code=200)
@@ -487,6 +537,23 @@ async def remove_person(person: str = Form(...)):
     """Xoá 1 người khỏi DB (không cần train). Ghi lại face_db.pt."""
     person = (person or "").strip()
     ok = rec.remove_person(person)
+    if ok:
+        rec.save_db()
+    return {"ok": ok, "person": person, "people": rec.people_summary()}
+
+
+@app.get("/people/samples")
+def people_samples(person: str):
+    """Chẩn đoán từng mẫu của 1 người (tự-khớp + giống ai nhất trong người khác) — tìm mẫu
+    enroll NHẦM (vd ảnh son gắn nhầm tên tri) mà không cần xem lại ảnh (DB không lưu ảnh)."""
+    return {"person": person, "samples": rec.sample_diagnostics((person or "").strip())}
+
+
+@app.post("/remove-sample")
+async def remove_sample(person: str = Form(...), index: int = Form(...)):
+    """Xoá 1 MẪU cụ thể của 'person' theo index lấy từ /people/samples. Ghi lại face_db.pt."""
+    person = (person or "").strip()
+    ok = rec.remove_embedding(person, index)
     if ok:
         rec.save_db()
     return {"ok": ok, "person": person, "people": rec.people_summary()}

@@ -37,12 +37,12 @@
         }
         @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(74,222,128,.5)} 70%{box-shadow:0 0 0 7px rgba(74,222,128,0)} 100%{box-shadow:0 0 0 0 rgba(74,222,128,0)} }
 
-        .layout { display: flex; gap: 20px; max-width: 1200px; margin: 0 auto; align-items: flex-start; flex-wrap: wrap; }
-        .left  { flex: 1 1 640px; min-width: 320px; }
+        .layout { display: flex; gap: 20px; max-width: 1560px; margin: 0 auto; align-items: flex-start; flex-wrap: wrap; }
+        .left  { flex: 3 1 900px; min-width: 320px; }
         .right { flex: 1 1 350px; min-width: 300px; display: flex; flex-direction: column; gap: 16px; }
 
         .display-box {
-            width: 100%; aspect-ratio: 4/3; border-radius: 18px; overflow: hidden;
+            width: 100%; aspect-ratio: 16/9; border-radius: 18px; overflow: hidden;
             background: linear-gradient(135deg,#1e293b,#0f172a); border: 1px solid var(--border2);
             display: flex; align-items: center; justify-content: center; box-shadow: var(--shadow);
         }
@@ -123,7 +123,7 @@
         <div class="left">
             <div class="cams-row" style="display:flex;gap:14px;flex-wrap:wrap;">
                 <!-- CAMERA 1 -->
-                <div class="card" style="flex:1 1 320px;min-width:290px;">
+                <div class="card" style="flex:1 1 420px;min-width:340px;">
                     <h3>📷 Camera 1 · <span style="color:#38bdf8">UGreen 2K</span></h3>
                     <div class="display-box" style="position:relative;">
                         <video id="v1" autoplay playsinline muted
@@ -139,7 +139,7 @@
                     </div>
                 </div>
                 <!-- CAMERA 2 -->
-                <div class="card" style="flex:1 1 320px;min-width:290px;">
+                <div class="card" style="flex:1 1 420px;min-width:340px;">
                     <h3>📷 Camera 2 · <span style="color:#c084fc">Rapoo C260</span></h3>
                     <div class="display-box" style="position:relative;">
                         <video id="v2" autoplay playsinline muted
@@ -160,16 +160,14 @@
                 <button class="btn btn-red" onclick="stopAll()">Tắt hết</button>
             </div>
             <a class="btn-link" href="/results" target="_blank">Xem kết quả train</a>
-        </div>
 
-        <!-- CỘT PHẢI: ngưỡng + nhật ký + quản lý người -->
-        <div class="right">
-            <div class="card">
+            <div class="card" style="margin-top:16px;">
                 <h3>Ngưỡng nhận diện</h3>
                 <div class="slider">
                     <div class="slider-top"><span>Người quen ≥</span><b id="ck-val">0.30</b></div>
                     <input type="range" id="ck" min="0.20" max="0.95" step="0.01" value="0.30">
-                    <div class="hint">Cao → chắc chắn mới nhận tên (ít nhầm, dễ báo "lạ").</div>
+                    <div class="hint">Cao → chắc chắn mới nhận tên (ít nhầm, dễ báo "lạ").<br>
+                        <span style="color:#c084fc">Camera 2 (Rapoo)</span> tự siết chặt hơn (ngưỡng +0.07, cần cách người nhì ≥0.05) + bù cân sáng/nét (CLAHE + unsharp) do fixed-focus, không HDR. Lắp cao chiếu xuống nên vẫn nên enroll mẫu bằng chính cam này khi có đủ người.</div>
                 </div>
                 <div class="slider">
                     <div class="slider-top"><span>Bắt mặt ≥</span><b id="cd-val">0.25</b></div>
@@ -178,6 +176,20 @@
                 </div>
             </div>
 
+            <div class="card" style="margin-top:16px;">
+                <h3>Nguyên lý hoạt động</h3>
+                <div class="step"><div class="n">1</div><div class="tx">Mỗi camera gửi <b>2 luồng song song</b> lên server: <b>/track</b> (nhanh ~10fps, chỉ tìm VỊ TRÍ khung mặt, chưa đoán tên) để khung bám sát mượt mắt, và <b>/process-frame</b> (thưa hơn) để nhận diện tên THẬT.</div></div>
+                <div class="step"><div class="n">2</div><div class="tx"><b>YOLO26</b> khoanh mọi khuôn mặt có trong khung hình.</div></div>
+                <div class="step"><div class="n">3</div><div class="tx"><b>ArcFace</b> cắt lại đúng vùng mặt từ ẢNH GỐC (không phải ảnh đã thu nhỏ), tự căn theo 5 điểm mốc (mắt/mũi/miệng) rồi biến thành vector 512 số — coi như "vân tay" khuôn mặt. Camera ảnh mềm/thiếu sáng (Rapoo, không AF/HDR) được cân sáng cục bộ (CLAHE) + làm nét (unsharp) NGAY TRƯỚC bước này để bù phần cứng yếu hơn.</div></div>
+                <div class="step"><div class="n">4</div><div class="tx">So <b>cosine</b> vector đó với MỌI mẫu đã đăng ký trong DB → ra người giống nhất (top-1) và giống nhì (top-2).</div></div>
+                <div class="step"><div class="n">5</div><div class="tx">2 lớp gác trước khi nhận tên: top-1 phải đạt <b>ngưỡng cosine</b> (mỗi camera 1 ngưỡng riêng — camera ảnh kém đòi ngưỡng cao hơn) <b>VÀ</b> phải cách xa top-2 đủ mức (tránh nhận nhầm khi 2 người quen bị lẫn điểm). Thiếu 1 trong 2 → <b class="pill-r">chưa chắc</b>, không gán tên bừa.</div></div>
+                <div class="step"><div class="n">6</div><div class="tx"><b>Làm mượt theo thời gian</b>: mỗi khuôn mặt được bám theo 1 "track" riêng qua nhiều khung liên tiếp; một danh tính phải chiếm ĐA SỐ phiếu trong ~5 khung gần nhất mới được gán → không bị nhấp nháy <b class="pill-g">Người quen</b> ↔ <b class="pill-r">Người lạ</b>.</div></div>
+                <div class="step"><div class="n">7</div><div class="tx">Ghi nhật ký: <b>đứng im</b> đủ 2 giây → ghi 1 lần duy nhất; <b>di chuyển</b> → ghi mỗi lần đổi trạng thái. Xuất Excel theo Ngày / Tuần / Tháng.</div></div>
+            </div>
+        </div>
+
+        <!-- CỘT PHẢI: nhật ký + quản lý người -->
+        <div class="right">
             <div class="card">
                 <h3>Nhật ký <span style="font-size:11px;color:#94a3b8;font-weight:normal;"></span></h3>
                 <div id="log" class="log"><div class="empty">Chưa có sự kiện</div></div>
@@ -204,14 +216,6 @@
                 <div id="cap-status" style="font-size:13px;color:#94a3b8;margin-top:8px;text-align:center;">Chưa chụp mẫu nào</div>
                 <div style="font-size:12px;color:#94a3b8;margin:12px 0 6px;border-top:1px solid #334155;padding-top:10px;">Người trong hệ thống:</div>
                 <div id="people-box" style="font-size:13px;color:#cbd5e1;">Đang tải...</div>
-            </div>
-
-            <div class="card">
-                <h3>Nguyên lý hoạt động</h3>
-                <div class="step"><div class="n">1</div><div class="tx"><b>Camera</b> gửi từng khung hình lên server (FastAPI).</div></div>
-                <div class="step"><div class="n">2</div><div class="tx"><b>YOLO26</b> tìm & khoanh khuôn mặt; <b>ArcFace</b> biến mặt thành vector rồi so (cosine) với người đã đăng ký.</div></div>
-                <div class="step"><div class="n">3</div><div class="tx">Xét độ giống cosine:<br>• ≥ ngưỡng (mặc định 0.35) → <b class="pill-g">Người quen</b>, hiện tên.<br>• thấp hơn → <b class="pill-r">Người lạ</b>. Người khác thường chỉ ~0.1 nên tên đúng cách xa hẳn.</div></div>
-                <div class="step"><div class="n">4</div><div class="tx">Vẽ khung + trả ảnh về, cập nhật kết quả <b>realtime</b>.</div></div>
             </div>
         </div>
     </div>
@@ -308,20 +312,65 @@
                 return;
             }
             box.innerHTML = people.map(p => `
-                <div style="display:flex;align-items:center;gap:6px;padding:5px 8px;margin:4px 0;background:#0f172a;border:1px solid #334155;border-radius:6px;">
-                    <span style="flex:1;min-width:0;">
-                        <b>${p.name}</b>
-                        <span style="color:#94a3b8;font-size:12px;"> · ${p.count} mẫu</span>
-                    </span>
-                    <select onchange="updateRole('${p.name}', this.value)" title="Đổi role"
-                        style="background:#1e293b;color:#e2e8f0;border:1px solid #475569;border-radius:5px;padding:3px 6px;font-size:12px;cursor:pointer;">
-                        <option value="kỹ sư"    ${p.role === 'kỹ sư'    ? 'selected' : ''}>Nhân viên</option>
-                        <option value="sinh viên" ${p.role === 'sinh viên' ? 'selected' : ''}>Sinh viên</option>
-                    </select>
-                    <button onclick="removePerson('${p.name}')" title="Xoa nguoi nay"
-                        style="background:#7f1d1d;color:#fecaca;border:none;border-radius:5px;padding:3px 9px;cursor:pointer;font-size:13px;flex-shrink:0;">X</button>
+                <div style="margin:4px 0;background:#0f172a;border:1px solid #334155;border-radius:6px;">
+                    <div style="display:flex;align-items:center;gap:6px;padding:5px 8px;">
+                        <span style="flex:1;min-width:0;">
+                            <b>${p.name}</b>
+                            <span style="color:#94a3b8;font-size:12px;"> · ${p.count} mẫu</span>
+                        </span>
+                        <select onchange="updateRole('${p.name}', this.value)" title="Đổi role"
+                            style="background:#1e293b;color:#e2e8f0;border:1px solid #475569;border-radius:5px;padding:3px 6px;font-size:12px;cursor:pointer;">
+                            <option value="kỹ sư"    ${p.role === 'kỹ sư'    ? 'selected' : ''}>Nhân viên</option>
+                            <option value="sinh viên" ${p.role === 'sinh viên' ? 'selected' : ''}>Sinh viên</option>
+                        </select>
+                        <button onclick="toggleSamples('${p.name}')" title="Xem/xoá từng mẫu (tìm mẫu enroll nhầm)"
+                            style="background:#334155;color:#cbd5e1;border:none;border-radius:5px;padding:3px 8px;cursor:pointer;font-size:12px;flex-shrink:0;">Mẫu</button>
+                        <button onclick="removePerson('${p.name}')" title="Xoa nguoi nay"
+                            style="background:#7f1d1d;color:#fecaca;border:none;border-radius:5px;padding:3px 9px;cursor:pointer;font-size:13px;flex-shrink:0;">X</button>
+                    </div>
+                    <div id="samp-${encodeURIComponent(p.name)}" style="display:none;padding:0 8px 8px;font-size:12px;"></div>
                 </div>`).join('');
             dl.innerHTML = people.map(p => `<option value="${p.name}">`).join('');
+        }
+
+        // ── Chẩn đoán mẫu: tự-khớp thấp + giống người KHÁC cao → nghi enroll nhầm ──
+        async function loadSamples(name) {
+            let el = document.getElementById('samp-' + encodeURIComponent(name));
+            if (!el) return;
+            el.style.display = 'block';
+            el.innerHTML = '<span style="color:#94a3b8">Đang tải...</span>';
+            try {
+                let d = await (await fetch('/people/samples?person=' + encodeURIComponent(name))).json();
+                if (!d.samples.length) { el.innerHTML = '<span style="color:#94a3b8">Không có mẫu</span>'; return; }
+                el.innerHTML = d.samples.map(s => {
+                    const suspicious = s.self_sim < 0.35;   // gợi ý trực quan, không tự xoá
+                    const other = s.closest_other
+                        ? `giống nhất: <b>${s.closest_other}</b> ${Math.round(s.closest_score * 100)}%`
+                        : 'mẫu duy nhất';
+                    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 0;border-top:1px solid #1e293b;">
+                        <span style="color:${suspicious ? '#f87171' : '#94a3b8'}">#${s.index}  tự-khớp ${Math.round(s.self_sim * 100)}%  ·  ${other}</span>
+                        <button onclick="removeSample('${name}', ${s.index})"
+                            style="background:#7f1d1d;color:#fecaca;border:none;border-radius:4px;padding:2px 7px;cursor:pointer;font-size:11px;flex-shrink:0;">Xoá</button>
+                    </div>`;
+                }).join('');
+            } catch (e) { el.innerHTML = '<span style="color:#f87171">Lỗi tải</span>'; }
+        }
+
+        function toggleSamples(name) {
+            let el = document.getElementById('samp-' + encodeURIComponent(name));
+            if (!el) return;
+            if (el.style.display === 'block') { el.style.display = 'none'; return; }
+            loadSamples(name);
+        }
+
+        async function removeSample(name, index) {
+            if (!confirm(`Xoá mẫu #${index} của "${name}"?`)) return;
+            let fd = new FormData(); fd.append('person', name); fd.append('index', index);
+            try {
+                let d = await (await fetch('/remove-sample', { method: 'POST', body: fd })).json();
+                renderPeople(d.people);
+                if (d.people.some(p => p.name === name)) loadSamples(name);   // mở lại, index đã dịch lại
+            } catch (e) {}
         }
 
         async function loadPeople() {
@@ -406,9 +455,16 @@
             async start() {
                 this.stop();
                 const dev = this.select.value;
+                // Ép ĐỘ PHÂN GIẢI GỐC tối đa của mỗi cam — nếu không ép, trình duyệt có thể tự
+                // chọn mức thấp hơn khả năng thật (nhất là USB 2.0 như Rapoo), làm mặt bị bé/mờ
+                // oan khi lên ArcFace. 'ideal' chỉ là gợi ý, cam không đạt vẫn chạy bình thường.
+                const RES = { cam1: { width: 2560, height: 1440 }, cam2: { width: 1920, height: 1080 } };
+                const res = RES[this.id] || RES.cam1;
                 try {
-                    this.stream = await navigator.mediaDevices.getUserMedia(
-                        { video: dev ? { deviceId: { exact: dev } } : true });
+                    this.stream = await navigator.mediaDevices.getUserMedia({ video: {
+                        ...(dev ? { deviceId: { exact: dev } } : {}),
+                        width: { ideal: res.width }, height: { ideal: res.height }, frameRate: { ideal: 30 },
+                    }});
                     this.video.srcObject = this.stream;
                     this.video.style.display = 'block'; this.ph.style.display = 'none';
                     this.on = true; this.frameTimes = []; this.boxes = [];
