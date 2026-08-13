@@ -124,7 +124,7 @@
             <div class="cams-row" style="display:flex;gap:14px;flex-wrap:wrap;">
                 <!-- CAMERA 1 -->
                 <div class="card" style="flex:1 1 420px;min-width:340px;">
-                    <h3>📷 Camera 1 · <span style="color:#38bdf8">UGreen 2K</span></h3>
+                    <h3>📷 Camera 1 · <span style="color:#38bdf8">UGreen 2K</span> · <span style="color:#4ade80">Check-in (Vào)</span></h3>
                     <div class="display-box" style="position:relative;">
                         <video id="v1" autoplay playsinline muted
                                style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none;"></video>
@@ -140,7 +140,7 @@
                 </div>
                 <!-- CAMERA 2 -->
                 <div class="card" style="flex:1 1 420px;min-width:340px;">
-                    <h3>📷 Camera 2 · <span style="color:#c084fc">Rapoo C260</span></h3>
+                    <h3>📷 Camera 2 · <span style="color:#c084fc">Rapoo C260</span> · <span style="color:#f87171">Check-out (Ra)</span></h3>
                     <div class="display-box" style="position:relative;">
                         <video id="v2" autoplay playsinline muted
                                style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none;"></video>
@@ -167,7 +167,8 @@
                     <div class="slider-top"><span>Người quen ≥</span><b id="ck-val">0.30</b></div>
                     <input type="range" id="ck" min="0.20" max="0.95" step="0.01" value="0.30">
                     <div class="hint">Cao → chắc chắn mới nhận tên (ít nhầm, dễ báo "lạ").<br>
-                        <span style="color:#c084fc">Camera 2 (Rapoo)</span> tự siết chặt hơn (ngưỡng +0.07, cần cách người nhì ≥0.05) + bù cân sáng/nét (CLAHE + unsharp) do fixed-focus, không HDR. Lắp cao chiếu xuống nên vẫn nên enroll mẫu bằng chính cam này khi có đủ người.</div>
+                        <span style="color:#c084fc">Camera 2 (Rapoo)</span> tự siết chặt hơn (ngưỡng +0.07, cần cách người nhì ≥0.05) + bù cân sáng/nét (CLAHE + unsharp) do fixed-focus, không HDR. Lắp cao chiếu xuống nên vẫn nên enroll mẫu bằng chính cam này khi có đủ người.<br>
+                        Cả 2 cam đều lọc khung <b>mờ do di chuyển</b> trước khi nhận diện (không tính phiếu) — cam2 nới ngưỡng mờ hơn vì ảnh vốn mềm sẵn.</div>
                 </div>
                 <div class="slider">
                     <div class="slider-top"><span>Bắt mặt ≥</span><b id="cd-val">0.25</b></div>
@@ -185,6 +186,7 @@
                 <div class="step"><div class="n">5</div><div class="tx">2 lớp gác trước khi nhận tên: top-1 phải đạt <b>ngưỡng cosine</b> (mỗi camera 1 ngưỡng riêng — camera ảnh kém đòi ngưỡng cao hơn) <b>VÀ</b> phải cách xa top-2 đủ mức (tránh nhận nhầm khi 2 người quen bị lẫn điểm). Thiếu 1 trong 2 → <b class="pill-r">chưa chắc</b>, không gán tên bừa.</div></div>
                 <div class="step"><div class="n">6</div><div class="tx"><b>Làm mượt theo thời gian</b>: mỗi khuôn mặt được bám theo 1 "track" riêng qua nhiều khung liên tiếp; một danh tính phải chiếm ĐA SỐ phiếu trong ~5 khung gần nhất mới được gán → không bị nhấp nháy <b class="pill-g">Người quen</b> ↔ <b class="pill-r">Người lạ</b>.</div></div>
                 <div class="step"><div class="n">7</div><div class="tx">Ghi nhật ký: <b>đứng im</b> đủ 2 giây → ghi 1 lần duy nhất; <b>di chuyển</b> → ghi mỗi lần đổi trạng thái. Xuất Excel theo Ngày / Tuần / Tháng.</div></div>
+                <div class="step"><div class="n">8</div><div class="tx">Check-in/out theo ĐÚNG camera nhận ra người: <b style="color:#4ade80">Camera 1 (UGreen)</b> = cổng <b>vào</b>, <b style="color:#f87171">Camera 2 (Rapoo)</b> = cổng <b>ra</b> — không còn suy luận qua việc "đang được thấy" gộp cả 2 cam.</div></div>
             </div>
         </div>
 
@@ -230,20 +232,12 @@
 
         const TRACK_INTERVAL_MS = 100;   // /track ~10fps → khung bám sát
         const RECOG_INTERVAL_MS = 300;   // /process-frame ~3fps → nhận diện tên
+        const RECOG_INTERVAL_MAX_MS = 900;   // trần cho auto-throttle dynRecog — CPU bận (2 cam
+                                              // cùng lúc) từng làm khoảng cách nhận diện vọt lên
+                                              // vài giây, người đi qua rời khung trước khi tích đủ
+                                              // phiếu để được gán tên. Giữ trần để vẫn kịp bắt người
+                                              // di chuyển ngay cả khi máy đang tải nặng.
         const DRAW_INTERVAL_MS  = 66;    // vẽ khung ~15fps
-
-        // ── CHẤM CÔNG (Tuần/Tháng): người "trong phòng" = thấy ở BẤT KỲ camera nào ──
-        const camKnown = { cam1: [], cam2: [] };
-        let lastUnionKey = null;
-        async function updateAttendance(camId, known) {
-            camKnown[camId] = known;
-            const union = [...new Set([...camKnown.cam1, ...camKnown.cam2])].sort();
-            const key = union.join(',');
-            if (key === lastUnionKey) return;
-            lastUnionKey = key;
-            try { let fd = new FormData(); fd.append('current_names', union.join(','));
-                  await fetch('/log-event', { method: 'POST', body: fd }); } catch (e) {}
-        }
 
         // ── NHẬT KÝ UI (gộp 2 camera, gắn tên camera) ──
         function addScanLog(ev) {
@@ -480,7 +474,6 @@
                 this.boxes = []; this.octx.clearRect(0, 0, this.overlay.width, this.overlay.height);
                 this.video.style.display = 'none'; this.ph.style.display = 'block'; this.ph.innerText = 'Đã tắt';
                 this.fpsEl.innerText = this.faceEl.innerText = this.msEl.innerText = '0';
-                camKnown[this.id] = [];
             }
             grab(cvs, maxW, q, cb) {
                 let vw = this.video.videoWidth, vh = this.video.videoHeight;
@@ -521,8 +514,8 @@
                         (data.scan_events || []).forEach(addScanLog);
                         this.faceEl.innerText = data.count || 0;
                         this.msEl.innerText = data.infer_ms != null ? data.infer_ms : 0;
-                        updateAttendance(this.id, data.known || []);
-                        let t = performance.now(); this.dynRecog = Math.max(RECOG_INTERVAL_MS, (t - t0) * 1.8);
+                        let t = performance.now();
+                        this.dynRecog = Math.min(RECOG_INTERVAL_MAX_MS, Math.max(RECOG_INTERVAL_MS, (t - t0) * 1.8));
                     } catch (e) {} finally { this.recogBusy = false; }
                 });
             }
