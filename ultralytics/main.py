@@ -43,6 +43,8 @@ KNOWN_PEOPLE = ["nghia", "quan", "son", "tri", "tui"]
 
 # ── NHẬT KÝ RA VÀO (lưu toàn bộ phiên, export ra Excel — dùng cho sheet Tuần/Tháng) ──
 # Mỗi entry: {dt, type, person, role, duration_min, ks_present, sv_present, total_ks, total_sv}
+# Check-in/check-out TÁCH THEO CAMERA (như cổng vào/cổng ra vật lý) chứ không suy từ việc
+# "ai đang được thấy" gộp cả 2 cam — xem CAM_ROLE + _log_attendance().
 _attendance_log: list[dict] = []
 _in_room: dict[str, datetime] = {}   # name → thời điểm vào phòng
 
@@ -77,6 +79,23 @@ CAM_TUNE = {
     "cam1": {"thr_bump": 0.00, "margin": 0.00},
     "cam2": {"thr_bump": 0.07, "margin": 0.05},
 }
+
+# ── CAMERA NÀO = CỔNG VÀO, CAMERA NÀO = CỔNG RA ──
+# UGreen (cam1) đặt ở lối VÀO, Rapoo (cam2) đặt ở lối RA. Check-in/out do đó gán THẲNG theo
+# camera nhận ra người — không suy luận qua "người này có đang được nhìn thấy hay không" gộp
+# cả 2 cam (cách cũ dễ lẫn: ai đó chỉ lướt qua cam RA mà chưa từng vào vẫn bị tính "vào").
+CAM_ROLE = {"cam1": "vào", "cam2": "ra"}
+
+# ── LỌC MẶT MỜ TRƯỚC KHI CHẠY ArcFace (chống NHẬN SAI do motion-blur) ──
+# ArcFace vẫn "chạy được" trên ảnh mờ nhưng cho embedding kém tin cậy → dễ nhận NHẦM người quen
+# A thành B (khác với "người lạ" — đây là lỗi nặng hơn). Cùng nguyên lý các kiosk nhận diện
+# (như Vinwonders): chỉ MATCH trên khung ĐỦ NÉT, khung mờ thì bỏ qua phiếu (không chạy ArcFace,
+# không tính vào cửa sổ làm mượt) — track vẫn bám vị trí, đợi khung nét hơn (vài trăm ms sau)
+# mới nhận. Đo bằng phương sai Laplacian trên vùng mặt resize chuẩn 100x100 (độc lập khoảng
+# cách gần/xa camera). Rapoo (cam2) vốn mềm hơn (fixed-focus) → ngưỡng thấp hơn cam1, nếu không
+# sẽ bỏ qua gần hết khung của cam2.
+BLUR_THR = {"cam1": 60.0, "cam2": 35.0}
+SKIP_VOTE = "__SKIP__"   # sentinel best_name: khung bị lọc mờ, KHÔNG tính là phiếu "lạ"/"chưa chắc"
 
 # ── BÙ ẢNH MỀM/THIẾU SÁNG (chỉ cam thiếu AF/HDR — KHÔNG đụng vùng nhìn) ──
 # Rapoo không HDR (dễ cháy/tối chỗ sáng-tối lệch, nhất là lắp trên cao chiếu xuống → trán
@@ -113,6 +132,8 @@ def _log_scan(person: str, status: str, cam: str, motion: str = "Đứng im"):
                       "role": rec.db_roles.get(person, "kỹ sư"),
                       "status": status, "motion": motion,
                       "cam": CAMERAS.get(cam, cam)})
+    if status == "OK":
+        _log_attendance(person, cam)   # OK ở cam VÀO/RA → check-in/out (xem CAM_ROLE)
 
 print(f"[main] Khởi tạo YOLO26 + ArcFace...")
 rec = FaceRecognizer(det_conf=CONF_DETECT)   # YOLO detect mặt, ArcFace nhận diện tên
@@ -150,6 +171,18 @@ STRANGER_MIN = 4       # phải "lạ" liên tục >= 4 frame mới ghi Người
 TRACK_TTL   = 1.5      # track không thấy > 1.5 giây → xoá (dọn theo THỜI GIAN, độc lập FPS)
 REFRESH_SEC = 3.0      # đã nhận ra người quen → DÙNG LẠI danh tính, chỉ chạy ArcFace lại sau 3s
                        # (cache danh tính → bỏ phần lớn ArcFace trên CPU khi người đã nhận ra)
+REACQUIRE_GAP = 0.6    # ghép LẠI 1 track sau khi mất dấu > 0.6s (nhưng < TRACK_TTL nên chưa bị xoá)
+                       # → COI NHƯ CÓ THỂ LÀ NGƯỜI KHÁC đứng đúng chỗ đó, xoá sạch danh tính cũ,
+                       # buộc nhận diện lại từ đầu. Chống lỗi: người A rời đi, người B đứng gần
+                       # chỗ A vừa đứng → track "thừa kế" nhầm tên A tới tận khi đủ phiếu mới đè lên.
+                       # Người đi liên tục (ghép mỗi ~100ms qua /track, gap luôn < 0.6s) KHÔNG bị
+                       # reset — chỉ trigger khi có GIÁN ĐOẠN thật (rời khung/bị che/đổi người).
+
+def _reacquire_if_stale(t, now):
+    """Gọi TRƯỚC khi cập nhật seen cho 1 track vừa được ghép lại — xem REACQUIRE_GAP."""
+    if (now - t["seen"]).total_seconds() > REACQUIRE_GAP:
+        t["hist"].clear(); t["label"] = "LẠ"; t["logged_label"] = ""
+        t["ever_known"] = False; t["arc_time"] = None; t["arc_score"] = 0.5
 
 def _is_moving(pos, wsize):
     """pos: deque (cx, cy, dt). TỐC ĐỘ theo GIÂY (độc lập FPS) + BỀN với nhiễu:
@@ -222,9 +255,11 @@ def smooth_labels(faces, W, H, threshold, st, cam):
             tracks.append(t); used.add(len(tracks) - 1)
         else:
             t = tracks[bt]
+            _reacquire_if_stale(t, now)   # gián đoạn dài → có thể người KHÁC, xoá danh tính cũ
             t["cx"], t["cy"], t["seen"] = cxn, cyn, now
             used.add(bt)
-        t["hist"].append((bn, bs))
+        if bn != SKIP_VOTE:   # khung mờ → không tính phiếu, giữ nguyên hist cũ (xem BLUR_THR)
+            t["hist"].append((bn, bs))
 
         # ── ĐO CHUYỂN ĐỘNG (theo TỐC ĐỘ, độc lập FPS): đứng im hay di chuyển ──
         t["pos"].append((cxn, cyn, now))
@@ -344,6 +379,7 @@ async def process_frame(
     boxes = await loop.run_in_executor(executor, lambda: rec.detect(img))
     now_dt = datetime.now()
     thr_m = _match_thr()
+    blur_thr = BLUR_THR.get(cam, BLUR_THR["cam1"])
     faces = [None] * len(boxes)
     trk_of, need = [], []
     for i, b in enumerate(boxes):
@@ -355,6 +391,9 @@ async def process_frame(
                 and (now_dt - tr["arc_time"]).total_seconds() < REFRESH_SEC):
             faces[i] = {"box": (x1, y1, x2, y2), "best_name": tr["label"],
                         "score": tr["arc_score"], "runner": None}   # DÙNG LẠI (bỏ ArcFace)
+        elif rec.is_blurry(img, (x1, y1, x2, y2), blur_thr):
+            # khung mờ (motion-blur) → bỏ ArcFace hẳn, không tính phiếu (xem BLUR_THR/SKIP_VOTE)
+            faces[i] = {"box": (x1, y1, x2, y2), "best_name": SKIP_VOTE, "score": 0.0, "runner": None}
         else:
             need.append(i)
     if need:
@@ -370,7 +409,12 @@ async def process_frame(
                           if len(ranked) > 1 else None)
                 # margin gate: top-1 sát top-2 → NHẬP NHẰNG 2 người quen, bỏ tên (best_name=None)
                 # để frame này thành phiếu "chưa chắc"; bộ làm mượt cần đa số frame chắc mới gán.
-                name = None if (top_score - run_score) < margin else top_name
+                # Mặt ĐANG DI CHUYỂN vốn mờ hơn (motion blur) → top1/top2 tự nhiên sát nhau hơn
+                # người đứng im; đòi margin y hệt sẽ loại oan hầu hết phiếu của người đi qua → giảm
+                # nửa margin khi track đang moving (đã có sẵn t["moving"] cập nhật từ /track).
+                m_tr = trk_of[need[k]]
+                m = margin * 0.5 if (m_tr is not None and m_tr.get("moving")) else margin
+                name = None if (top_score - run_score) < m else top_name
                 got[k] = (name, round(top_score, 3), runner)
         for pos, i in enumerate(need):
             x1, y1, x2, y2 = boxes[i][:4]
@@ -444,9 +488,9 @@ async def track_faces(
     rec.det_conf = min(max(conf_detect, 0.05), 0.9)
     loop = asyncio.get_event_loop()
     H, W = img.shape[:2]
-    # /track chạy nhanh ~10fps chỉ để bám khung (tên lấy từ cache) → KHÔNG áp _enhance ở đây, đỡ tốn CPU thêm ở vòng lặp tần suất cao; nhận dạng thật
-    # (nơi _enhance có tác dụng) nằm ở /process-frame.
-    # YOLO ở imgsz nhỏ → nhanh hơn nhiều trên CPU
+    # /track chạy nhanh ~10fps chỉ để bám khung (tên lấy từ cache, không chạy ArcFace) → KHÔNG
+    # áp _enhance ở đây, đỡ tốn CPU thêm ở vòng lặp tần suất cao; nhận dạng thật (nơi _enhance
+    # có tác dụng) nằm ở /process-frame. YOLO imgsz nhỏ → nhanh hơn nhiều trên CPU.
     boxes = await loop.run_in_executor(executor, lambda: rec.detect(img, imgsz=TRACK_IMGSZ))
 
     st = _cam_states[cam]                 # state tracking riêng của camera này
@@ -466,6 +510,7 @@ async def track_faces(
             tracks.append(t); bi = len(tracks) - 1
         else:
             t = tracks[bi]
+            _reacquire_if_stale(t, now)   # gián đoạn dài → có thể người KHÁC, xoá danh tính cũ
             t["cx"], t["cy"], t["seen"] = cxn, cyn, now
         used.add(bi)
         # GÓP dữ liệu chuyển động ở nhịp nhanh của /track → đo đứng/đi chính xác
@@ -506,7 +551,7 @@ async def capture(file: UploadFile = File(...), person: str = Form(...), role: s
 
     is_new = person not in rec.db_names
     rec.add_embedding(person, vec, role=role)   # thêm vào DB in-memory (tạo người mới nếu chưa có)
-    rec.save_db()                    # ghi ra face_db.pt (bền sau khi tắt)
+    rec.save_db()                    # ghi ra face_db.pt
 
     count = int((rec.db_owner == rec.db_names.index(person)).sum())
     total = rec.db_embs.shape[0]
@@ -516,14 +561,12 @@ async def capture(file: UploadFile = File(...), person: str = Form(...), role: s
 
 @app.get("/people")
 def people():
-    """Danh sách người trong DB + số mẫu mỗi người (cho web quản lý add/remove)."""
     return {"people": rec.people_summary(),
             "total": 0 if rec.db_embs is None else int(rec.db_embs.shape[0])}
 
 
 @app.post("/update-role")
 async def update_role(person: str = Form(...), role: str = Form(...)):
-    """Đổi role của người đã có trong DB mà không mất embedding."""
     person = (person or "").strip()
     if person not in rec.db_names:
         return JSONResponse({"ok": False, "msg": f"Không tìm thấy '{person}'"}, status_code=200)
@@ -544,8 +587,7 @@ async def remove_person(person: str = Form(...)):
 
 @app.get("/people/samples")
 def people_samples(person: str):
-    """Chẩn đoán từng mẫu của 1 người (tự-khớp + giống ai nhất trong người khác) — tìm mẫu
-    enroll NHẦM (vd ảnh son gắn nhầm tên tri) mà không cần xem lại ảnh (DB không lưu ảnh)."""
+    """Chẩn đoán từng mẫu của 1 người — tìm mẫu enroll NHẦM mà không cần xem lại ảnh."""
     return {"person": person, "samples": rec.sample_diagnostics((person or "").strip())}
 
 
@@ -558,9 +600,6 @@ async def remove_sample(person: str = Form(...), index: int = Form(...)):
         rec.save_db()
     return {"ok": ok, "person": person, "people": rec.people_summary()}
 
-
-# ======================= NHẬT KÝ + EXPORT =======================
-
 def _room_snapshot():
     """Snapshot trạng thái phòng theo vai trò dựa trên _in_room hiện tại."""
     ks_present = [n for n in _in_room if rec.db_roles.get(n, "kỹ sư") == "kỹ sư"]
@@ -570,42 +609,33 @@ def _room_snapshot():
     return ks_present, sv_present, total_ks, total_sv
 
 
-@app.post("/log-event")
-async def log_event(
-    current_names: str = Form(""),   # tên người quen đang nhìn thấy, cách nhau dấu phẩy
-):
-
-    now     = datetime.now()
-    current = {n.strip() for n in current_names.split(",") if n.strip()}
-    prev    = set(_in_room.keys())
-
-    entered = current - prev
-    exited  = prev - current
-
-    for name in entered:
-        _in_room[name] = now
+def _log_attendance(person: str, cam: str):
+    """Check-in/out THEO CAMERA (xem CAM_ROLE) — gọi từ _log_scan() ngay khi 1 track được
+    xác nhận OK, không cần client tự gộp/poll trạng thái 2 cam. Idempotent: OK lặp lại khi
+    di chuyển (mỗi frame) không tạo thêm sự kiện vì đã kiểm tra _in_room trước khi ghi."""
+    role = CAM_ROLE.get(cam)
+    now = datetime.now()
+    if role == "vào" and person not in _in_room:
+        _in_room[person] = now
         ks_p, sv_p, t_ks, t_sv = _room_snapshot()
         _attendance_log.append({
-            "dt": now, "type": "vào", "person": name,
-            "role": rec.db_roles.get(name, "kỹ sư"),
+            "dt": now, "type": "vào", "person": person,
+            "role": rec.db_roles.get(person, "kỹ sư"),
             "duration_min": None,
             "ks_present": list(ks_p), "sv_present": list(sv_p),
             "total_ks": t_ks, "total_sv": t_sv,
         })
-
-    for name in exited:
-        entry_time = _in_room.pop(name)
+    elif role == "ra" and person in _in_room:
+        entry_time = _in_room.pop(person)
         dur = round((now - entry_time).total_seconds() / 60, 1)
         ks_p, sv_p, t_ks, t_sv = _room_snapshot()
         _attendance_log.append({
-            "dt": now, "type": "ra", "person": name,
-            "role": rec.db_roles.get(name, "kỹ sư"),
+            "dt": now, "type": "ra", "person": person,
+            "role": rec.db_roles.get(person, "kỹ sư"),
             "duration_min": dur,
             "ks_present": list(ks_p), "sv_present": list(sv_p),
             "total_ks": t_ks, "total_sv": t_sv,
         })
-
-    return {"ok": True, "in_room": list(_in_room.keys()), "total_events": len(_attendance_log)}
 
 
 def _sessions_from_events(events: list[dict]) -> list[dict]:

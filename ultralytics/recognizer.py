@@ -98,6 +98,21 @@ class FaceRecognizer:
             out.append((x1, y1, x2, y2, float(b.conf[0])))
         return out
 
+    def is_blurry(self, img_bgr, box, thr=60.0):
+        """True nếu vùng mặt MỜ (phương sai Laplacian < thr) — dùng để BỎ QUA hẳn ArcFace
+        trên khung nhoè do di chuyển: ảnh mờ vẫn ra được embedding nhưng kém tin cậy, dễ
+        NHẬN NHẦM người quen này thành người quen khác. Resize chuẩn 100x100 trước khi đo
+        để ngưỡng không phụ thuộc mặt gần/xa camera."""
+        H, W = img_bgr.shape[:2]
+        x1, y1, x2, y2 = box[:4]
+        x1, y1 = max(0, int(x1)), max(0, int(y1))
+        x2, y2 = min(W, int(x2)), min(H, int(y2))
+        crop = img_bgr[y1:y2, x1:x2]
+        if crop.size == 0:
+            return True
+        gray = cv2.cvtColor(cv2.resize(crop, (100, 100)), cv2.COLOR_BGR2GRAY)
+        return float(cv2.Laplacian(gray, cv2.CV_64F).var()) < thr
+
     def _embed_crop(self, img_bgr, box):
         """Cắt vùng box (có margin) → ArcFace tự căn 5 landmark + embedding. Trả vec[512]"""
         H, W = img_bgr.shape[:2]
