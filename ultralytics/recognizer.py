@@ -1,12 +1,3 @@
-"""
-
-  YOLO26 là DETECTOR chính (nhanh, đã fine-tune trên đúng 5 mặt này nên bắt mặt rất chắc).
-  ArcFace chỉ căn chỉnh + tạo embedding trên vùng mặt YOLO đã khoanh.
-
-Nhận diện = KHOẢNG CÁCH embedding, không phải softmax 5 lớp:
-  → "người lạ" đáng tin (không bị ép chọn 1 trong 5)
-  → thêm người = thêm vào DB, KHÔNG train lại.
-"""
 import os
 import numpy as np
 import cv2
@@ -23,8 +14,7 @@ DB_PATH   = os.path.join(BASE_DIR, "face_db.pt")
 # Cho phép ép chọn thiết bị OpenVINO cho YOLO qua biến môi trường: "GPU" (iGPU) hoặc "CPU".
 OV_YOLO_DEVICE = os.environ.get("OV_YOLO_DEVICE", "intel:gpu")
 
-MARGIN = 0.30   # nới quanh box YOLO trước khi đưa vào ArcFace (cần ít context để căn landmark)
-
+MARGIN = 0.30   # nới quanh box YOLO trước khi đưa vào ArcFace 
 
 class FaceRecognizer:
     def __init__(self, yolo_path=YOLO_PATH, db_path=DB_PATH, device=None,
@@ -40,7 +30,6 @@ class FaceRecognizer:
         self.has_openvino = "OpenVINOExecutionProvider" in avail
 
         # ── YOLO26 — detector khuôn mặt ──
-        # Ưu tiên bản OpenVINO (Intel NUC: nhanh hơn nhiều trên CPU/iGPU) nếu đã export.
         self.yolo_device = None
         if os.path.isdir(YOLO_OV):
             self.yolo = YOLO(YOLO_OV, task="detect")
@@ -81,8 +70,7 @@ class FaceRecognizer:
             self.load_db(db_path)
 
     def detect(self, img_bgr, imgsz=None):
-        """Trả list (x1,y1,x2,y2,conf) của MỌI mặt.
-        imgsz nhỏ hơn (vd 320) → YOLO nhanh hơn nhiều trên CPU (dùng cho /track bám khung)."""
+        """Trả list (x1,y1,x2,y2,conf) của MỌI mặt."""
         if self.yolo_device is not None:            # YOLO OpenVINO (Intel): CPU/iGPU
             dev = self.yolo_device
         else:
@@ -132,7 +120,7 @@ class FaceRecognizer:
         return torch.tensor(f.normed_embedding, dtype=torch.float32)
 
     def embed(self, img_bgr, boxes):
-        """boxes → (emb [K,512] normalized, keep: chỉ số box embed thành công)."""
+        """boxes → (emb [K,512] normalized, keep: box embed thành công)."""
         vecs, keep = [], []
         for i, b in enumerate(boxes):
             v = self._embed_crop(img_bgr, b)

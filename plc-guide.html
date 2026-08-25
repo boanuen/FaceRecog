@@ -1,0 +1,1114 @@
+<title>Đấu Đèn Tháp Qua PLC</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;600&display=swap">
+
+<style>
+:root{
+  --paper:#F1F2EF;
+  --surface:#FFFFFF;
+  --surface-2:#E7EAE4;
+  --ink:#1A1E24;
+  --ink-muted:#5B636D;
+  --hair:#C7CBC4;
+  --hair-soft:#DDE0DA;
+  --accent:#0C5E86;
+  --accent-soft:#E1EDF4;
+  --lamp-green:#0F7D45;
+  --lamp-amber:#A87400;
+  --lamp-red:#B8332A;
+  --warn-bg:#FAEFE2;
+  --warn-bar:#B06A12;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#15181C;
+    --surface:#1D2127;
+    --surface-2:#262B32;
+    --ink:#E3E6E9;
+    --ink-muted:#99A1AA;
+    --hair:#333A42;
+    --hair-soft:#2A3037;
+    --accent:#5CB0DA;
+    --accent-soft:#17303D;
+    --lamp-green:#43C079;
+    --lamp-amber:#DFA93C;
+    --lamp-red:#E86F65;
+    --warn-bg:#2C2418;
+    --warn-bar:#C58B3A;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#15181C;
+  --surface:#1D2127;
+  --surface-2:#262B32;
+  --ink:#E3E6E9;
+  --ink-muted:#99A1AA;
+  --hair:#333A42;
+  --hair-soft:#2A3037;
+  --accent:#5CB0DA;
+  --accent-soft:#17303D;
+  --lamp-green:#43C079;
+  --lamp-amber:#DFA93C;
+  --lamp-red:#E86F65;
+  --warn-bg:#2C2418;
+  --warn-bar:#C58B3A;
+}
+
+*{box-sizing:border-box}
+
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:"IBM Plex Serif",Georgia,"Times New Roman",serif;
+  font-size:16.5px;
+  line-height:1.68;
+  -webkit-font-smoothing:antialiased;
+}
+
+.wrap{
+  max-width:1120px;
+  margin:0 auto;
+  padding:0 28px 100px;
+}
+
+/* ── HEADER ─────────────────────────────────────── */
+header.masthead{
+  border-bottom:2px solid var(--ink);
+  padding:52px 0 22px;
+  margin-bottom:44px;
+}
+.eyebrow{
+  font-family:"IBM Plex Mono",ui-monospace,monospace;
+  font-size:11.5px;
+  letter-spacing:.13em;
+  text-transform:uppercase;
+  color:var(--accent);
+  font-weight:600;
+  margin:0 0 14px;
+}
+h1{
+  font-family:"IBM Plex Sans Condensed",'Arial Narrow',sans-serif;
+  font-weight:700;
+  font-size:clamp(2.5rem,6vw,4.1rem);
+  line-height:1.02;
+  letter-spacing:-.015em;
+  margin:0 0 18px;
+  text-wrap:balance;
+}
+.standfirst{
+  font-size:1.14rem;
+  color:var(--ink-muted);
+  max-width:64ch;
+  margin:0 0 26px;
+}
+.meta-strip{
+  display:flex;
+  flex-wrap:wrap;
+  gap:0;
+  border-top:1px solid var(--hair);
+  padding-top:16px;
+}
+.meta-strip div{
+  padding-right:30px;
+  margin-right:30px;
+  border-right:1px solid var(--hair);
+}
+.meta-strip div:last-child{border-right:none}
+.meta-k{
+  display:block;
+  font-family:"IBM Plex Mono",monospace;
+  font-size:10.5px;
+  letter-spacing:.1em;
+  text-transform:uppercase;
+  color:var(--ink-muted);
+  margin-bottom:3px;
+}
+.meta-v{
+  font-family:"IBM Plex Sans Condensed",sans-serif;
+  font-weight:600;
+  font-size:1rem;
+}
+
+/* ── TYPOGRAPHY ─────────────────────────────────── */
+main{max-width:none}
+.prose{max-width:68ch}
+p{margin:0 0 1.05em}
+
+h2{
+  font-family:"IBM Plex Sans Condensed",sans-serif;
+  font-weight:700;
+  font-size:clamp(1.6rem,3vw,2.15rem);
+  line-height:1.13;
+  letter-spacing:-.01em;
+  margin:0 0 6px;
+  text-wrap:balance;
+}
+h3{
+  font-family:"IBM Plex Sans Condensed",sans-serif;
+  font-weight:600;
+  font-size:1.24rem;
+  line-height:1.25;
+  margin:0 0 10px;
+  text-wrap:balance;
+}
+h4{
+  font-family:"IBM Plex Sans Condensed",sans-serif;
+  font-weight:600;
+  font-size:1.03rem;
+  margin:0 0 8px;
+  letter-spacing:.005em;
+}
+
+code{
+  font-family:"IBM Plex Mono",ui-monospace,monospace;
+  font-size:.87em;
+  background:var(--surface-2);
+  padding:.12em .38em;
+  border-radius:2px;
+  font-weight:600;
+}
+strong{font-weight:600}
+a{color:var(--accent)}
+
+/* ── PHASE STRUCTURE ────────────────────────────── */
+.phase{
+  margin-top:72px;
+  scroll-margin-top:20px;
+}
+.phase-head{
+  display:flex;
+  align-items:baseline;
+  gap:20px;
+  border-top:2px solid var(--ink);
+  padding-top:18px;
+  margin-bottom:26px;
+}
+.phase-mark{
+  font-family:"IBM Plex Mono",monospace;
+  font-weight:600;
+  font-size:2.4rem;
+  line-height:1;
+  color:var(--accent);
+  flex:none;
+  letter-spacing:-.03em;
+}
+.phase-title{flex:1}
+.phase-sub{
+  font-family:"IBM Plex Mono",monospace;
+  font-size:11px;
+  letter-spacing:.1em;
+  text-transform:uppercase;
+  color:var(--ink-muted);
+  margin:6px 0 0;
+}
+
+/* ── STEP ───────────────────────────────────────── */
+.step{
+  border-left:3px solid var(--hair);
+  padding:2px 0 2px 24px;
+  margin:0 0 34px;
+}
+.step > h3{
+  display:flex;
+  gap:12px;
+  align-items:baseline;
+}
+.step-n{
+  font-family:"IBM Plex Mono",monospace;
+  font-size:.8em;
+  color:var(--accent);
+  font-weight:600;
+  flex:none;
+}
+.step ol,.step ul{margin:0 0 1em;padding-left:1.3em}
+.step li{margin-bottom:.42em}
+.prose ol,.prose ul{padding-left:1.3em}
+.prose li{margin-bottom:.42em}
+
+/* ── FIGURE ─────────────────────────────────────── */
+figure{
+  margin:34px 0;
+  background:var(--surface);
+  border:1px solid var(--hair);
+  padding:26px 24px 18px;
+}
+figure .svg-scroll{overflow-x:auto}
+figure svg{display:block;max-width:100%;height:auto;margin:0 auto;color:var(--ink)}
+figcaption{
+  font-family:"IBM Plex Sans Condensed",sans-serif;
+  font-size:.9rem;
+  color:var(--ink-muted);
+  margin-top:18px;
+  padding-top:12px;
+  border-top:1px solid var(--hair-soft);
+  text-wrap:balance;
+}
+
+/* ── CALLOUTS ───────────────────────────────────── */
+.note,.warn{
+  border-left:4px solid var(--accent);
+  background:var(--accent-soft);
+  padding:16px 20px;
+  margin:26px 0;
+  font-size:.97rem;
+}
+.warn{
+  border-left-color:var(--warn-bar);
+  background:var(--warn-bg);
+}
+.note p:last-child,.warn p:last-child{margin-bottom:0}
+.callout-label{
+  display:block;
+  font-family:"IBM Plex Mono",monospace;
+  font-size:10.5px;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  font-weight:600;
+  margin-bottom:6px;
+}
+.note .callout-label{color:var(--accent)}
+.warn .callout-label{color:var(--warn-bar)}
+
+/* ── TABLES ─────────────────────────────────────── */
+.table-scroll{overflow-x:auto;margin:26px 0}
+table{
+  border-collapse:collapse;
+  width:100%;
+  min-width:520px;
+  font-family:"IBM Plex Sans Condensed",sans-serif;
+  font-size:.95rem;
+  background:var(--surface);
+}
+th{
+  text-align:left;
+  font-weight:600;
+  font-size:11px;
+  letter-spacing:.09em;
+  text-transform:uppercase;
+  color:var(--ink-muted);
+  border-bottom:1.5px solid var(--ink);
+  padding:9px 14px;
+  white-space:nowrap;
+}
+td{
+  border-bottom:1px solid var(--hair-soft);
+  padding:10px 14px;
+  vertical-align:top;
+}
+tbody tr:last-child td{border-bottom:1px solid var(--hair)}
+td code{background:transparent;padding:0;color:var(--accent)}
+.num{font-variant-numeric:tabular-nums;font-family:"IBM Plex Mono",monospace;font-size:.88em}
+
+/* ── CODE BLOCK ─────────────────────────────────── */
+pre{
+  font-family:"IBM Plex Mono",ui-monospace,monospace;
+  font-size:.85rem;
+  line-height:1.62;
+  background:var(--surface);
+  border:1px solid var(--hair);
+  border-left:3px solid var(--accent);
+  padding:18px 20px;
+  overflow-x:auto;
+  margin:22px 0;
+}
+pre code{background:transparent;padding:0;font-weight:400}
+
+/* ── LAMP CHIPS ─────────────────────────────────── */
+.lamp-rows{
+  display:grid;
+  gap:0;
+  margin:26px 0;
+  border-top:1px solid var(--hair);
+}
+.lamp-row{
+  display:flex;
+  align-items:flex-start;
+  gap:18px;
+  padding:14px 4px;
+  border-bottom:1px solid var(--hair-soft);
+}
+.dot{
+  width:14px;height:14px;border-radius:50%;
+  flex:none;margin-top:6px;
+}
+.dot.g{background:var(--lamp-green)}
+.dot.y{background:var(--lamp-amber)}
+.dot.r{background:var(--lamp-red)}
+.lamp-row b{
+  font-family:"IBM Plex Sans Condensed",sans-serif;
+  font-weight:600;
+  flex:none;
+  width:96px;
+}
+.lamp-row span{font-size:.97rem}
+
+/* ── WORKSHEET ──────────────────────────────────── */
+.sheet{
+  background:var(--surface);
+  border:1.5px solid var(--ink);
+  padding:28px 26px;
+  margin:30px 0;
+}
+.sheet h3{margin-bottom:4px}
+.sheet-sub{
+  font-family:"IBM Plex Mono",monospace;
+  font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-muted);margin:0 0 22px;
+}
+.field{
+  display:flex;align-items:baseline;gap:14px;
+  border-bottom:1px dashed var(--hair);
+  padding:11px 0;
+}
+.field label{
+  font-family:"IBM Plex Sans Condensed",sans-serif;
+  font-weight:600;font-size:.95rem;
+  width:min(260px,45%);flex:none;
+}
+.field .blank{
+  flex:1;
+  font-family:"IBM Plex Mono",monospace;
+  font-size:.85rem;
+  color:var(--ink-muted);
+}
+
+/* ── CHECKLIST ──────────────────────────────────── */
+.check{list-style:none;padding:0;margin:22px 0}
+.check li{
+  display:flex;gap:14px;align-items:flex-start;
+  padding:11px 0;border-bottom:1px solid var(--hair-soft);
+}
+.check li::before{
+  content:"";
+  width:15px;height:15px;flex:none;margin-top:5px;
+  border:1.5px solid var(--ink-muted);
+}
+
+hr.rule{
+  border:none;border-top:1px solid var(--hair);
+  margin:54px 0;
+}
+
+footer{
+  margin-top:80px;padding-top:22px;
+  border-top:2px solid var(--ink);
+  font-family:"IBM Plex Sans Condensed",sans-serif;
+  font-size:.9rem;color:var(--ink-muted);
+}
+
+@media (max-width:640px){
+  .wrap{padding:0 18px 70px}
+  .meta-strip div{border-right:none;padding-right:0;margin-right:24px;margin-bottom:10px}
+  .phase-head{gap:14px}
+  .phase-mark{font-size:1.8rem}
+  .lamp-row{flex-wrap:wrap}
+  .lamp-row b{width:auto}
+  .field{flex-wrap:wrap;gap:6px}
+  .field label{width:100%}
+}
+
+@media print{
+  body{background:#fff;color:#000;font-size:11pt}
+  figure,table,pre,.sheet{break-inside:avoid}
+  .phase{break-before:page}
+}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
+}
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <p class="eyebrow">Hướng dẫn tích hợp · FaceRecog → Mitsubishi Q / iQ-R</p>
+  <h1>Đấu Đèn Tháp Qua PLC</h1>
+  <p class="standfirst">Từ lúc hệ thống nhận ra một khuôn mặt tới lúc bóng đèn thật sáng lên — toàn bộ quy trình cấu hình, đấu dây, viết ladder và kiểm tra, theo đúng thứ tự phải làm.</p>
+  <div class="meta-strip">
+    <div><span class="meta-k">Giao thức</span><span class="meta-v">MC Protocol · khung 3E</span></div>
+    <div><span class="meta-k">Kết nối</span><span class="meta-v">Ethernet TCP/IP</span></div>
+    <div><span class="meta-k">Phần mềm PLC</span><span class="meta-v">GX Works2 / GX Works3</span></div>
+    <div><span class="meta-k">Thư viện PC</span><span class="meta-v">pymcprotocol</span></div>
+  </div>
+</header>
+
+<main>
+
+<!-- ══════════ NGUYÊN LÝ ══════════ -->
+<section class="phase" id="nguyen-ly" style="margin-top:0">
+  <div class="phase-head">
+    <div class="phase-mark">§</div>
+    <div class="phase-title">
+      <h2>Nguyên lý: tín hiệu đi qua năm chặng</h2>
+      <p class="phase-sub">Đọc phần này trước — nó quyết định bạn debug ở đâu khi hỏng</p>
+    </div>
+  </div>
+
+  <div class="prose">
+    <p>Điều quan trọng nhất phải nắm: <strong>PLC hoàn toàn thụ động</strong>. Nó không hỏi PC "có ai vừa quét mặt không", không chạy vòng lặp kiểm tra, và ladder của bạn <em>không cần viết thêm dòng nào</em> để "lắng nghe". Module Ethernet trên PLC là một phần cứng độc lập — nó nhận gói tin đúng định dạng rồi ghi thẳng vào ô nhớ trong CPU. Toàn bộ trí thông minh nằm ở phía PC.</p>
+    <p>Tín hiệu đi qua năm chặng, mỗi chặng do một thành phần khác nhau chịu trách nhiệm. Khi hệ thống hỏng, việc đầu tiên là xác định nó chết ở chặng nào — phần <a href="#kiem-tra">Quy trình kiểm tra</a> ở cuối được thiết kế đúng để cô lập từng chặng một.</p>
+  </div>
+
+  <figure>
+    <div class="svg-scroll">
+      <svg viewBox="0 0 940 232" role="img" aria-label="Sơ đồ năm chặng: camera gửi frame lên Python, Python nhận diện ra tên, hàm log_scan chọn màu đèn, module plc_light đóng gói khung 3E gửi qua TCP, PLC ghi bit vào ngõ ra Y và bật đèn.">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 1 L 9 5 L 0 9 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- boxes -->
+        <g stroke="currentColor" stroke-width="1.3" fill="none">
+          <rect x="8"   y="62" width="150" height="76"/>
+          <rect x="204" y="62" width="150" height="76"/>
+          <rect x="400" y="62" width="150" height="76"/>
+          <rect x="596" y="62" width="150" height="76"/>
+          <rect x="792" y="62" width="140" height="76" stroke-width="2.2"/>
+        </g>
+
+        <!-- box numbers -->
+        <g font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" fill="currentColor" opacity=".5">
+          <text x="18"  y="78">01</text>
+          <text x="214" y="78">02</text>
+          <text x="410" y="78">03</text>
+          <text x="606" y="78">04</text>
+          <text x="802" y="78">05</text>
+        </g>
+
+        <!-- box titles -->
+        <g font-family="IBM Plex Sans Condensed, sans-serif" font-size="13.5" font-weight="600" fill="currentColor" text-anchor="middle">
+          <text x="83"  y="103">Camera</text>
+          <text x="279" y="103">Nhận diện</text>
+          <text x="475" y="103">Chọn màu</text>
+          <text x="671" y="103">Đóng gói</text>
+          <text x="862" y="103">PLC</text>
+        </g>
+        <g font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".62" text-anchor="middle">
+          <text x="83"  y="122">cam1 / cam2</text>
+          <text x="279" y="122">YOLO + ArcFace</text>
+          <text x="475" y="122">_log_scan()</text>
+          <text x="671" y="122">khung 3E</text>
+          <text x="862" y="122">Y0 / Y1 / Y2</text>
+        </g>
+
+        <!-- where it runs -->
+        <g font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".45" text-anchor="middle">
+          <text x="83"  y="160">trình duyệt</text>
+          <text x="279" y="160">main.py</text>
+          <text x="475" y="160">main.py</text>
+          <text x="671" y="160">thread nền</text>
+          <text x="862" y="160">phần cứng</text>
+        </g>
+
+        <!-- arrows -->
+        <g stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)">
+          <line x1="158" y1="100" x2="198" y2="100"/>
+          <line x1="354" y1="100" x2="394" y2="100"/>
+          <line x1="550" y1="100" x2="590" y2="100"/>
+          <line x1="746" y1="100" x2="786" y2="100"/>
+        </g>
+        <g font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" text-anchor="middle" opacity=".8">
+          <text x="178" y="90">frame</text>
+          <text x="374" y="90">tên + cam</text>
+          <text x="570" y="84">green /</text>
+          <text x="570" y="94">yellow / red</text>
+          <text x="766" y="84">TCP</text>
+          <text x="766" y="94">:5000</text>
+        </g>
+
+        <!-- lamp output -->
+        <g>
+          <circle cx="862" cy="185" r="7" fill="currentColor" opacity=".85"/>
+          <line x1="862" y1="138" x2="862" y2="176" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"/>
+          <text x="862" y="212" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" text-anchor="middle" opacity=".6">đèn sáng 1,5 s</text>
+        </g>
+
+        <!-- boundary line -->
+        <line x1="770" y1="34" x2="770" y2="200" stroke="currentColor" stroke-width="1" stroke-dasharray="4 4" opacity=".38"/>
+        <text x="762" y="28" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" text-anchor="end" opacity=".55">← phần mềm (PC)</text>
+        <text x="778" y="28" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".55">phần cứng (tủ điện) →</text>
+      </svg>
+    </div>
+    <figcaption>Ranh giới đứt nét là chỗ trách nhiệm chuyển tay: mọi thứ bên trái sửa bằng code, mọi thứ bên phải sửa bằng tua vít và đồng hồ đo.</figcaption>
+  </figure>
+
+  <div class="prose">
+    <h3>Màu đèn phụ thuộc camera, không phụ thuộc người</h3>
+    <p>Đây là điểm nhiều người hiểu nhầm khi đọc code. Cùng một nhân viên, đi qua cam1 thì đèn xanh, đi qua cam2 thì đèn vàng — vì hệ thống chấm công của bạn định nghĩa <code>cam1</code> là cổng vào và <code>cam2</code> là cổng ra (hằng số <code>CAM_ROLE</code>).</p>
+  </div>
+
+  <div class="lamp-rows">
+    <div class="lamp-row"><span class="dot g"></span><b>Xanh</b><span>Nhận diện <code>OK</code> trên cam1 — người quen đang <strong>vào</strong>, đã ghi check-in.</span></div>
+    <div class="lamp-row"><span class="dot y"></span><b>Vàng</b><span>Nhận diện <code>OK</code> trên cam2 — người quen đang <strong>ra</strong>, đã ghi check-out kèm thời lượng.</span></div>
+    <div class="lamp-row"><span class="dot r"></span><b>Đỏ</b><span><code>FAIL</code> (đang là người quen bỗng tụt thành lạ) hoặc <code>LẠ</code> (không có trong database) — trên cả hai camera.</span></div>
+  </div>
+
+  <div class="note">
+    <span class="callout-label">Vì sao móc vào <code>_log_scan()</code></span>
+    <p>Trong <code>main.py</code>, mọi sự kiện nhận diện đều đi qua đúng một cửa ngõ này: ghi Excel qua đây, hiện lên web qua đây, check-in/check-out qua đây. Móc đèn vào đây nghĩa là đèn <strong>không bao giờ lệch</strong> với log và với web — không cần đồng bộ thêm gì cả. Nếu sau này bạn đổi logic nhận diện, đèn tự động đi theo.</p>
+  </div>
+</section>
+
+<!-- ══════════ PHASE A ══════════ -->
+<section class="phase" id="phase-a">
+  <div class="phase-head">
+    <div class="phase-mark">A</div>
+    <div class="phase-title">
+      <h2>Mở cổng MC Protocol trên PLC</h2>
+      <p class="phase-sub">Làm trong GX Works · cần dừng PLC và nạp lại tham số</p>
+    </div>
+  </div>
+
+  <div class="prose">
+    <p>PLC xuất xưởng <strong>không tự động</strong> mở cổng nhận lệnh từ ngoài. Bạn phải khai báo trong tham số mạng rằng module Ethernet được phép chấp nhận kết nối MC Protocol, ở port nào. Đây là bước bắt buộc — không có nó thì dù mạng thông, PC vẫn bị từ chối kết nối.</p>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-n">A1</span> Xác định đúng phần mềm và điểm cấu hình</h3>
+    <p>Hai dòng PLC dùng hai phần mềm khác nhau, và chỗ cấu hình cũng nằm ở hai nơi khác nhau:</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Dòng PLC</th><th>Phần mềm</th><th>Đường dẫn cấu hình</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Q series</strong><br><span style="color:var(--ink-muted);font-size:.9em">module QJ71E71-100</span></td>
+            <td>GX Works2</td>
+            <td>Navigation → <em>Parameter</em> → <em>Network Parameter</em> → <em>Ethernet / CC IE / MELSECNET</em></td>
+          </tr>
+          <tr>
+            <td><strong>iQ-R</strong><br><span style="color:var(--ink-muted);font-size:.9em">cổng Ethernet tích hợp CPU</span></td>
+            <td>GX Works3</td>
+            <td>Navigation → <em>Parameter</em> → <em>CPU</em> → <em>Module Parameter</em> → <em>Basic Settings</em></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Nếu chưa biết mình có dòng nào: nhìn nhãn in trên thân CPU. Mã bắt đầu bằng <code>Q</code> (ví dụ <code>Q03UDVCPU</code>) là Q series; bắt đầu bằng <code>R</code> (ví dụ <code>R04CPU</code>) là iQ-R. Con số này cũng chính là giá trị bạn điền vào <code>PLC_TYPE</code> trong <code>main.py</code>.</p>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-n">A2</span> Đặt IP tĩnh cho module Ethernet</h3>
+    <p>Ở màn hình cấu hình vừa mở, đặt <em>IP Address</em> và <em>Subnet Mask</em>. Nguyên tắc: IP của PLC phải <strong>cùng dải mạng</strong> với PC chạy <code>main.py</code>, và không trùng với bất kỳ thiết bị nào khác.</p>
+    <p>Ví dụ nếu PC đang là <code>192.168.1.50</code> với mask <code>255.255.255.0</code>, thì đặt PLC là <code>192.168.1.10</code> cùng mask. Ba nhóm số đầu giống nhau, nhóm cuối khác nhau — đó là điều kiện để hai máy "nhìn thấy" nhau mà không cần router.</p>
+    <p>Nếu PLC đã có IP sẵn do người lắp tủ đặt từ trước thì <strong>đừng đổi</strong> — chỉ ghi lại con số đó, rồi chỉnh IP của PC cho về cùng dải.</p>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-n">A3</span> Khai báo connection MC Protocol</h3>
+    <p>Đây là bước cốt lõi. Trên Q series, bấm nút <em>Open Setting</em> — bảng hiện ra có 16 dòng, mỗi dòng là một "kênh" kết nối độc lập. Điền vào <strong>dòng số 1</strong> (hoặc dòng trống bất kỳ):</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Trường</th><th>Chọn</th><th>Ý nghĩa</th></tr></thead>
+        <tbody>
+          <tr><td>Protocol</td><td><code>TCP</code></td><td>Kết nối có bắt tay, đảm bảo gói tin tới nơi — đúng loại <code>pymcprotocol</code> dùng.</td></tr>
+          <tr><td>Open System</td><td><code>Unpassive</code></td><td>PLC chờ, chấp nhận kết nối từ bất kỳ IP nào. Chọn <code>Fullpassive</code> nếu muốn khoá cứng chỉ đúng IP của PC.</td></tr>
+          <tr><td>Fixed Buffer</td><td><code>Send</code></td><td>Không dùng tới trong MC Protocol, để mặc định.</td></tr>
+          <tr><td>Fixed Buffer Communication</td><td><code>Procedure Exist</code></td><td>Bật xử lý theo thủ tục chuẩn — chính là MC Protocol.</td></tr>
+          <tr><td>Pairing Open</td><td><code>Disable</code></td><td>Không ghép đôi kênh.</td></tr>
+          <tr><td>Existence Confirmation</td><td><code>No Confirm</code></td><td>Không cần PLC tự kiểm tra PC còn sống hay không.</td></tr>
+          <tr><td><strong>Host Station Port No.</strong></td><td><code>1388</code></td><td>Cổng PLC lắng nghe. Xem cảnh báo ngay bên dưới.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="warn">
+      <span class="callout-label">Bẫy kinh điển · port nhập hệ HEX</span>
+      <p>Trong GX Works2, ô <em>Host Station Port No.</em> thường nhập ở <strong>hệ thập lục phân</strong>, trong khi Python lại điền số thập phân. Muốn PLC lắng nghe ở port <code>5000</code>, bạn phải gõ <code>1388</code> vào GX Works2 (vì 1388₁₆ = 5000₁₀). Gõ thẳng <code>5000</code> sẽ ra port 20480 và kết nối thất bại mà không có thông báo lỗi nào rõ ràng.</p>
+      <p>Hãy kiểm tra nhãn ở đầu bảng — một số phiên bản có nút chuyển DEC/HEX. GX Works3 (iQ-R) thì nhập thập phân bình thường.</p>
+    </div>
+
+    <p>Trên <strong>iQ-R</strong>, bước tương đương nằm ở <em>External Device Configuration</em>: mở bảng cấu hình, kéo khối <em>MC Protocol Connection Module</em> từ thư viện bên phải thả vào vùng làm việc, rồi đặt port cho nó. Sau đó bấm <em>Close with Reflecting the Setting</em> để ghi nhận.</p>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-n">A4</span> Nạp tham số xuống PLC và khởi động lại</h3>
+    <ol>
+      <li>Chuyển công tắc trên CPU sang <code>STOP</code>.</li>
+      <li><em>Online</em> → <em>Write to PLC</em>, tích chọn nhóm <em>Parameter</em> (bắt buộc — nếu chỉ ghi Program thì cấu hình mạng không được cập nhật).</li>
+      <li>Bấm <em>Execute</em>, chờ ghi xong.</li>
+      <li><strong>Tắt nguồn PLC rồi bật lại</strong>, hoặc gạt công tắc <code>RESET</code>. Tham số Ethernet chỉ có hiệu lực sau khi module khởi động lại.</li>
+      <li>Chuyển công tắc về <code>RUN</code>.</li>
+    </ol>
+    <p>Quan sát đèn LED trên module Ethernet: đèn <code>INIT</code> hoặc <code>RUN</code> sáng ổn định nghĩa là module đã khởi tạo thành công với IP mới. Đèn <code>ERR.</code> sáng nghĩa là tham số có lỗi — quay lại kiểm tra IP/subnet.</p>
+  </div>
+</section>
+
+<!-- ══════════ PHASE B ══════════ -->
+<section class="phase" id="phase-b">
+  <div class="phase-head">
+    <div class="phase-mark">B</div>
+    <div class="phase-title">
+      <h2>Tìm đúng địa chỉ Y của ba bóng đèn</h2>
+      <p class="phase-sub">Không đoán — phải xác minh bằng quan sát trực tiếp</p>
+    </div>
+  </div>
+
+  <div class="prose">
+    <p>Trong <code>main.py</code> mình để tạm <code>Y0 / Y1 / Y2</code>, nhưng địa chỉ thật gần như chắc chắn <strong>không phải</strong> ba số đó. Lý do: ở Q series, địa chỉ ngõ ra phụ thuộc vào <em>vị trí slot</em> của module output trên base unit, và được cấp phát theo từng khối 16 điểm.</p>
+    <p>Ví dụ một base unit lắp: slot 0 là module input 16 điểm → chiếm <code>X0</code>–<code>X F</code>; slot 1 là module output 16 điểm → chiếm <code>Y10</code>–<code>Y1F</code>. Vậy chân đầu tiên của module output đó là <code>Y10</code> chứ không phải <code>Y0</code>. Nếu trước nó có thêm module nữa, con số còn dịch xa hơn.</p>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-n">B1</span> Đọc bảng phân bổ I/O</h3>
+    <p>Trong GX Works2: <em>Parameter</em> → <em>PLC Parameter</em> → tab <em>I/O Assignment</em>. Bảng này liệt kê từng slot, loại module, số điểm, và địa chỉ khởi đầu. Tìm dòng ứng với module output mà đèn tháp đấu vào, ghi lại địa chỉ đầu.</p>
+    <p>Không có file dự án? Bạn vẫn có thể suy ra bằng cách đếm module trên base unit từ trái sang, cộng dồn số điểm của từng module — nhưng cách này dễ sai, nên luôn xác minh bằng bước B2.</p>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-n">B2</span> Xác minh bằng cách ép bật từng ngõ ra</h3>
+    <p>Đây là cách duy nhất chắc chắn 100%, và nên làm ngay cả khi bạn đã đọc được bảng I/O:</p>
+    <ol>
+      <li>Kết nối GX Works với PLC, vào chế độ <em>Online Monitor</em>.</li>
+      <li>Mở <em>Debug</em> → <em>Modify Value</em> (GX Works2) hoặc <em>Device Test with Execution Condition</em> (GX Works3).</li>
+      <li>Gõ địa chỉ nghi ngờ, ví dụ <code>Y10</code>, chọn <em>FORCE ON</em>.</li>
+      <li><strong>Nhìn cột đèn tháp</strong>. Màu nào sáng thì đó chính là ánh xạ thật.</li>
+      <li><em>FORCE OFF</em>, rồi lặp lại với <code>Y11</code>, <code>Y12</code>…</li>
+    </ol>
+    <p>Ghi lại kết quả vào bảng ở cuối tài liệu. Đây là ba con số bạn sẽ điền vào <code>PLC_COILS</code>.</p>
+  </div>
+
+  <div class="warn">
+    <span class="callout-label">An toàn</span>
+    <p>Ép bật ngõ ra sẽ <strong>thật sự đóng mạch điện</strong>. Nếu module output đó còn điều khiển thiết bị khác ngoài đèn (van, băng tải, còi báo), việc FORCE ON có thể khiến máy chạy bất ngờ. Trước khi làm, xác nhận không có ai đứng trong vùng nguy hiểm và nếu cần thì ngắt nguồn động lực, chỉ giữ nguồn điều khiển.</p>
+  </div>
+</section>
+
+<!-- ══════════ PHASE C ══════════ -->
+<section class="phase" id="phase-c">
+  <div class="phase-head">
+    <div class="phase-mark">C</div>
+    <div class="phase-title">
+      <h2>Đấu dây đèn tháp</h2>
+      <p class="phase-sub">Bỏ qua nếu đèn đã đấu sẵn — nhưng vẫn nên đọc phần dòng tải</p>
+    </div>
+  </div>
+
+  <div class="prose">
+    <p>Nếu đèn tháp đã được lắp và đấu sẵn vào PLC, bạn chỉ cần làm phase B rồi bỏ qua phần này. Nếu phải tự đấu, có một quyết định kỹ thuật phải cân nhắc trước: <strong>module output của bạn có gánh nổi đèn không</strong>.</p>
+
+    <h3>Kiểm tra dòng tải trước khi đấu thẳng</h3>
+    <p>Module output của PLC có hai loại chính, chịu dòng rất khác nhau:</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Loại</th><th>Ví dụ mã</th><th>Dòng mỗi điểm</th><th>Đặc điểm</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Transistor</strong></td><td class="num">QY40P, QY80</td><td class="num">≈ 0,1 – 0,5 A</td><td>Đóng cắt nhanh, chỉ dùng cho tải DC nhỏ. Có loại sink (NPN) và source (PNP) — đấu ngược là không sáng.</td></tr>
+          <tr><td><strong>Relay</strong></td><td class="num">QY10</td><td class="num">≈ 2 A</td><td>Chịu tải lớn hơn, dùng được cả AC và DC, nhưng đóng cắt chậm và có tuổi thọ cơ khí.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Con số chính xác phải tra trong manual của đúng mã module bạn có — bảng trên chỉ là mức thường gặp. Sau đó so với đèn tháp: một tầng đèn LED 24 V DC thường ăn khoảng 20–50 mA, nên transistor output gánh thoải mái. Nhưng đèn sợi đốt, đèn có còi tích hợp, hoặc đèn 220 V thì <strong>bắt buộc phải qua relay trung gian</strong> — đấu thẳng sẽ cháy module.</p>
+  </div>
+
+  <figure>
+    <div class="svg-scroll">
+      <svg viewBox="0 0 860 330" role="img" aria-label="Hai cách đấu đèn tháp: cách A đấu thẳng ba chân Y vào ba màu đèn 24V DC dùng chung dây nguồn dương; cách B chèn ba relay trung gian giữa PLC và đèn khi đèn dùng 220V hoặc dòng lớn.">
+        <defs>
+          <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+            <path d="M 0 1 L 9 5 L 0 9 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- ── CÁCH A ── -->
+        <text x="8" y="18" font-family="IBM Plex Sans Condensed, sans-serif" font-size="13" font-weight="600" fill="currentColor">CÁCH A — đấu thẳng</text>
+        <text x="8" y="34" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".6">đèn LED 24 V DC, dòng nhỏ</text>
+
+        <!-- PLC module A -->
+        <rect x="8" y="48" width="128" height="104" fill="none" stroke="currentColor" stroke-width="1.3"/>
+        <text x="72" y="70" font-family="IBM Plex Sans Condensed, sans-serif" font-size="12" font-weight="600" fill="currentColor" text-anchor="middle">Module output</text>
+        <g font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">
+          <text x="20" y="92">Y10</text>
+          <text x="20" y="112">Y11</text>
+          <text x="20" y="132">Y12</text>
+          <text x="20" y="148" opacity=".6">COM</text>
+        </g>
+        <g stroke="currentColor" stroke-width="1.2">
+          <line x1="136" y1="88"  x2="196" y2="88"/>
+          <line x1="136" y1="108" x2="196" y2="108"/>
+          <line x1="136" y1="128" x2="196" y2="128"/>
+        </g>
+        <line x1="136" y1="144" x2="166" y2="144" stroke="currentColor" stroke-width="1.2" opacity=".55"/>
+        <text x="170" y="148" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".55">0 V</text>
+
+        <!-- lamps A -->
+        <g stroke="currentColor" stroke-width="1.3" fill="none">
+          <circle cx="212" cy="88"  r="10"/>
+          <circle cx="212" cy="108" r="10"/>
+          <circle cx="212" cy="128" r="10"/>
+        </g>
+        <g font-family="IBM Plex Sans Condensed, sans-serif" font-size="11" fill="currentColor">
+          <text x="230" y="92">xanh</text>
+          <text x="230" y="112">vàng</text>
+          <text x="230" y="132">đỏ</text>
+        </g>
+        <!-- common rail A -->
+        <g stroke="currentColor" stroke-width="1.2">
+          <line x1="222" y1="88"  x2="292" y2="88"/>
+          <line x1="222" y1="108" x2="292" y2="108"/>
+          <line x1="222" y1="128" x2="292" y2="128"/>
+          <line x1="292" y1="88"  x2="292" y2="128"/>
+          <line x1="292" y1="108" x2="330" y2="108"/>
+        </g>
+        <text x="336" y="112" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".75">+24 V</text>
+        <text x="212" y="172" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" text-anchor="middle" opacity=".55">3 dây màu + 1 dây chung</text>
+
+        <!-- divider -->
+        <line x1="418" y1="10" x2="418" y2="200" stroke="currentColor" stroke-width="1" stroke-dasharray="4 4" opacity=".35"/>
+
+        <!-- ── CÁCH B ── -->
+        <text x="440" y="18" font-family="IBM Plex Sans Condensed, sans-serif" font-size="13" font-weight="600" fill="currentColor">CÁCH B — qua relay trung gian</text>
+        <text x="440" y="34" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".6">đèn 220 V AC, hoặc dòng vượt mức module</text>
+
+        <rect x="440" y="48" width="112" height="104" fill="none" stroke="currentColor" stroke-width="1.3"/>
+        <text x="496" y="70" font-family="IBM Plex Sans Condensed, sans-serif" font-size="12" font-weight="600" fill="currentColor" text-anchor="middle">Module output</text>
+        <g font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">
+          <text x="452" y="92">Y10</text>
+          <text x="452" y="112">Y11</text>
+          <text x="452" y="132">Y12</text>
+        </g>
+        <g stroke="currentColor" stroke-width="1.2" marker-end="url(#ar2)">
+          <line x1="552" y1="88"  x2="596" y2="88"/>
+          <line x1="552" y1="108" x2="596" y2="108"/>
+          <line x1="552" y1="128" x2="596" y2="128"/>
+        </g>
+
+        <!-- relays -->
+        <g stroke="currentColor" stroke-width="1.3" fill="none">
+          <rect x="600" y="78"  width="46" height="20"/>
+          <rect x="600" y="98"  width="46" height="20"/>
+          <rect x="600" y="118" width="46" height="20"/>
+        </g>
+        <g font-family="IBM Plex Mono, monospace" font-size="9" fill="currentColor" text-anchor="middle">
+          <text x="623" y="92">KA1</text>
+          <text x="623" y="112">KA2</text>
+          <text x="623" y="132">KA3</text>
+        </g>
+        <text x="623" y="158" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" text-anchor="middle" opacity=".6">relay 24 V</text>
+
+        <g stroke="currentColor" stroke-width="1.2" marker-end="url(#ar2)">
+          <line x1="646" y1="88"  x2="690" y2="88"/>
+          <line x1="646" y1="108" x2="690" y2="108"/>
+          <line x1="646" y1="128" x2="690" y2="128"/>
+        </g>
+        <g stroke="currentColor" stroke-width="1.3" fill="none">
+          <circle cx="706" cy="88"  r="10"/>
+          <circle cx="706" cy="108" r="10"/>
+          <circle cx="706" cy="128" r="10"/>
+        </g>
+        <g font-family="IBM Plex Sans Condensed, sans-serif" font-size="11" fill="currentColor">
+          <text x="724" y="92">xanh</text>
+          <text x="724" y="112">vàng</text>
+          <text x="724" y="132">đỏ</text>
+        </g>
+        <text x="706" y="172" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" text-anchor="middle" opacity=".55">tải 220 V cách ly</text>
+
+        <!-- bottom note -->
+        <line x1="8" y1="222" x2="852" y2="222" stroke="currentColor" stroke-width="1" opacity=".25"/>
+        <text x="8" y="246" font-family="IBM Plex Sans Condensed, sans-serif" font-size="12" font-weight="600" fill="currentColor">Khác biệt duy nhất giữa hai cách</text>
+        <text x="8" y="268" font-family="IBM Plex Serif, serif" font-size="12" fill="currentColor" opacity=".8">Cách B chèn thêm ba relay: chân Y chỉ kéo cuộn hút 24 V (dòng rất nhỏ), còn tiếp điểm relay mới</text>
+        <text x="8" y="286" font-family="IBM Plex Serif, serif" font-size="12" fill="currentColor" opacity=".8">là thứ gánh dòng đèn. Module PLC được cách ly hoàn toàn khỏi tải — bắt buộc khi đèn dùng 220 V.</text>
+        <text x="8" y="312" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".6">Code Python và địa chỉ Y hoàn toàn không đổi giữa hai cách.</text>
+      </svg>
+    </div>
+    <figcaption>Chọn cách nào chỉ phụ thuộc dòng tải và điện áp của đèn — phần mềm không hề biết sự khác biệt này.</figcaption>
+  </figure>
+
+  <div class="warn">
+    <span class="callout-label">Trước khi chạm vào dây</span>
+    <p>Ngắt cầu dao cấp nguồn cho tủ, dùng bút thử điện xác nhận đã hết điện trước khi tháo bất kỳ terminal nào. Với đèn 220 V, sai một dây pha là chạm chập hoặc điện giật. Nếu bạn không có kinh nghiệm đấu tủ điện, hãy nhờ thợ điện của xưởng — phần này không nên tự mò.</p>
+  </div>
+</section>
+
+<!-- ══════════ PHASE D ══════════ -->
+<section class="phase" id="phase-d">
+  <div class="phase-head">
+    <div class="phase-mark">D</div>
+    <div class="phase-title">
+      <h2>Ladder trung gian: ghi vào M thay vì Y</h2>
+      <p class="phase-sub">Khuyến nghị mạnh — ba dòng ladder đổi lấy sự an toàn lâu dài</p>
+    </div>
+  </div>
+
+  <div class="prose">
+    <p>Code hiện tại ghi thẳng vào <code>Y</code>, tức là tác động trực tiếp lên ngõ ra vật lý. Cách này chạy được và đơn giản nhất — nhưng nó có một điểm yếu mà bạn nên hiểu rõ trước khi quyết định giữ hay đổi.</p>
+    <p>PLC chạy chu kỳ quét (scan cycle) liên tục, mỗi vòng vài mili giây: đọc ngõ vào → chạy ladder → xuất ngõ ra → lặp lại. Nếu trong ladder có <em>bất kỳ</em> dòng nào cũng điều khiển <code>Y10</code>, thì mỗi vòng quét ladder sẽ ghi đè giá trị mà PC vừa gửi. Kết quả: đèn không sáng, hoặc chỉ chớp cực nhanh rồi tắt — và bạn sẽ debug rất lâu vì phía Python báo "ghi thành công" hoàn toàn bình thường.</p>
+  </div>
+
+  <figure>
+    <div class="svg-scroll">
+      <svg viewBox="0 0 880 296" role="img" aria-label="So sánh hai cách: ghi thẳng vào Y10 thì ladder ghi đè mỗi vòng quét gây xung đột; ghi vào M100 rồi để ladder đọc M100 điều khiển Y10 thì không xung đột.">
+        <defs>
+          <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+            <path d="M 0 1 L 9 5 L 0 9 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- ROW 1 -->
+        <text x="8" y="20" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" fill="currentColor" opacity=".6">HIỆN TẠI</text>
+        <text x="86" y="20" font-family="IBM Plex Sans Condensed, sans-serif" font-size="13" font-weight="600" fill="currentColor">PC ghi thẳng vào ngõ ra</text>
+
+        <rect x="8" y="36" width="126" height="52" fill="none" stroke="currentColor" stroke-width="1.3"/>
+        <text x="71" y="58" font-family="IBM Plex Sans Condensed, sans-serif" font-size="12" font-weight="600" fill="currentColor" text-anchor="middle">main.py</text>
+        <text x="71" y="75" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" text-anchor="middle" opacity=".6">plc.signal()</text>
+
+        <line x1="134" y1="62" x2="222" y2="62" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar3)"/>
+        <text x="178" y="53" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" text-anchor="middle">ghi Y10 = 1</text>
+
+        <rect x="226" y="40" width="86" height="44" fill="none" stroke="currentColor" stroke-width="2"/>
+        <text x="269" y="67" font-family="IBM Plex Mono, monospace" font-size="14" font-weight="600" fill="currentColor" text-anchor="middle">Y10</text>
+
+        <line x1="410" y1="62" x2="318" y2="62" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar3)"/>
+        <text x="364" y="53" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" text-anchor="middle">ghi đè</text>
+        <text x="364" y="80" font-family="IBM Plex Mono, monospace" font-size="9" fill="currentColor" text-anchor="middle" opacity=".6">mỗi vòng quét</text>
+
+        <rect x="414" y="36" width="150" height="52" fill="none" stroke="currentColor" stroke-width="1.3" stroke-dasharray="5 3"/>
+        <text x="489" y="58" font-family="IBM Plex Sans Condensed, sans-serif" font-size="12" font-weight="600" fill="currentColor" text-anchor="middle">Ladder có sẵn</text>
+        <text x="489" y="75" font-family="IBM Plex Mono, monospace" font-size="9" fill="currentColor" text-anchor="middle" opacity=".6">nếu cũng dùng Y10</text>
+
+        <line x1="580" y1="62" x2="620" y2="62" stroke="currentColor" stroke-width="1" opacity=".4"/>
+        <text x="628" y="59" font-family="IBM Plex Sans Condensed, sans-serif" font-size="12" font-weight="600" fill="currentColor">Xung đột</text>
+        <text x="628" y="76" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".65">đèn chớp rồi tắt</text>
+
+        <!-- separator -->
+        <line x1="8" y1="118" x2="872" y2="118" stroke="currentColor" stroke-width="1" opacity=".25"/>
+
+        <!-- ROW 2 -->
+        <text x="8" y="152" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" fill="currentColor" opacity=".6">KHUYẾN NGHỊ</text>
+        <text x="110" y="152" font-family="IBM Plex Sans Condensed, sans-serif" font-size="13" font-weight="600" fill="currentColor">PC ghi vào bit nội, ladder giữ quyền xuất</text>
+
+        <rect x="8" y="168" width="126" height="52" fill="none" stroke="currentColor" stroke-width="1.3"/>
+        <text x="71" y="190" font-family="IBM Plex Sans Condensed, sans-serif" font-size="12" font-weight="600" fill="currentColor" text-anchor="middle">main.py</text>
+        <text x="71" y="207" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" text-anchor="middle" opacity=".6">plc.signal()</text>
+
+        <line x1="134" y1="194" x2="222" y2="194" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar3)"/>
+        <text x="178" y="185" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" text-anchor="middle">ghi M100 = 1</text>
+
+        <rect x="226" y="172" width="86" height="44" fill="none" stroke="currentColor" stroke-width="1.3"/>
+        <text x="269" y="199" font-family="IBM Plex Mono, monospace" font-size="14" font-weight="600" fill="currentColor" text-anchor="middle">M100</text>
+        <text x="269" y="232" font-family="IBM Plex Mono, monospace" font-size="9" fill="currentColor" text-anchor="middle" opacity=".55">bit nội, không ai tranh</text>
+
+        <line x1="312" y1="194" x2="410" y2="194" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar3)"/>
+        <text x="361" y="185" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" text-anchor="middle">ladder đọc</text>
+
+        <rect x="414" y="168" width="150" height="52" fill="none" stroke="currentColor" stroke-width="1.3"/>
+        <text x="489" y="190" font-family="IBM Plex Sans Condensed, sans-serif" font-size="12" font-weight="600" fill="currentColor" text-anchor="middle">Ladder</text>
+        <text x="489" y="207" font-family="IBM Plex Mono, monospace" font-size="9" fill="currentColor" text-anchor="middle" opacity=".6">M100 → Y10</text>
+
+        <line x1="564" y1="194" x2="620" y2="194" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar3)"/>
+
+        <rect x="624" y="172" width="80" height="44" fill="none" stroke="currentColor" stroke-width="2"/>
+        <text x="664" y="199" font-family="IBM Plex Mono, monospace" font-size="14" font-weight="600" fill="currentColor" text-anchor="middle">Y10</text>
+
+        <circle cx="762" cy="194" r="11" fill="currentColor" opacity=".85"/>
+        <line x1="704" y1="194" x2="744" y2="194" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar3)"/>
+        <text x="762" y="232" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" text-anchor="middle" opacity=".65">sáng ổn định</text>
+
+        <!-- caption line -->
+        <line x1="8" y1="262" x2="872" y2="262" stroke="currentColor" stroke-width="1" opacity=".25"/>
+        <text x="8" y="284" font-family="IBM Plex Serif, serif" font-size="12" fill="currentColor" opacity=".8">Quyền điều khiển phần cứng vẫn nằm trong ladder; PC chỉ gửi "đề nghị". Đây là cách làm chuẩn trong tủ điện công nghiệp.</text>
+      </svg>
+    </div>
+    <figcaption>Bit nội <code>M</code> là vùng đệm giữa thế giới phần mềm và thế giới phần cứng — thêm một lớp, mất một dòng ladder, đổi lấy việc không bao giờ tranh chấp ngõ ra.</figcaption>
+  </figure>
+
+  <div class="prose">
+    <h3>Ba rung ladder cần thêm</h3>
+    <p>Mở chương trình ladder trong GX Works, thêm ba dòng đơn giản nhất có thể — mỗi dòng là một tiếp điểm thường mở đọc bit <code>M</code>, nối tới cuộn dây ngõ ra <code>Y</code>:</p>
+  </div>
+
+<pre><code>     M100                                        Y10
+ ─────┤ ├────────────────────────────────────────( )─────   xanh
+
+     M101                                        Y11
+ ─────┤ ├────────────────────────────────────────( )─────   vàng
+
+     M102                                        Y12
+ ─────┤ ├────────────────────────────────────────( )─────   đỏ</code></pre>
+
+  <div class="prose">
+    <p>Nạp chương trình xuống PLC (<em>Write to PLC</em>, chọn nhóm <em>Program</em>), rồi sửa đúng một dòng trong <code>main.py</code>:</p>
+  </div>
+
+<pre><code>PLC_COILS = {"green": "M100", "yellow": "M101", "red": "M102"}</code></pre>
+
+  <div class="prose">
+    <p>Toàn bộ phần còn lại của code Python không đổi — <code>plc_light.py</code> không quan tâm nó đang ghi vào <code>Y</code> hay <code>M</code>, chỉ đơn thuần gửi đúng địa chỉ được cấu hình.</p>
+    <p>Lợi ích thêm mà cách này mang lại: sau này nếu muốn đèn có logic phức tạp hơn — ví dụ đèn đỏ phải nhấp nháy thay vì sáng liên tục, hoặc còi báo kêu kèm khi có người lạ — bạn viết luôn trong ladder mà không cần đụng gì tới code Python.</p>
+  </div>
+
+  <div class="note">
+    <span class="callout-label">Khi nào được phép ghi thẳng Y</span>
+    <p>Nếu bạn chắc chắn ba ngõ đó <strong>hoàn toàn không xuất hiện</strong> ở bất kỳ đâu trong chương trình ladder (dùng chức năng <em>Find Device</em> trong GX Works để tìm <code>Y10</code> trên toàn bộ project — nếu chỉ ra kết quả rỗng thì an toàn), thì ghi thẳng <code>Y</code> hoạt động tốt và bớt được một bước. Chỉ cần nhớ ghi chú lại điều này vào tài liệu tủ điện, để người sửa ladder sau này không vô tình đụng vào.</p>
+  </div>
+</section>
+
+<!-- ══════════ PHASE E ══════════ -->
+<section class="phase" id="kiem-tra">
+  <div class="phase-head">
+    <div class="phase-mark">E</div>
+    <div class="phase-title">
+      <h2>Quy trình kiểm tra năm bước</h2>
+      <p class="phase-sub">Làm đúng thứ tự — mỗi bước cô lập một chặng</p>
+    </div>
+  </div>
+
+  <div class="prose">
+    <p>Đừng chạy thẳng hệ thống hoàn chỉnh rồi mới xem đèn có sáng không. Nếu hỏng, bạn sẽ không biết lỗi nằm ở mạng, ở cấu hình PLC, ở địa chỉ Y, hay ở dây điện. Năm bước dưới đây đi từ tầng thấp nhất lên, mỗi bước chỉ kiểm tra <em>một</em> thứ — bước nào fail thì bạn biết chính xác phải sửa gì.</p>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-n">E1</span> Kiểm tra tầng mạng</h3>
+    <p>Mở Command Prompt trên PC chạy <code>main.py</code>:</p>
+    <pre><code>ping 192.168.1.10</code></pre>
+    <p><strong>Có reply</strong> → tầng mạng thông, đi tiếp. <strong>Request timed out</strong> → dừng lại: kiểm tra cáp mạng, đèn LINK trên module Ethernet, IP của PC có cùng dải không (<code>ipconfig</code>), và tường lửa Windows.</p>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-n">E2</span> Kiểm tra phần cứng đèn, không liên quan gì tới Python</h3>
+    <p>Dùng GX Works FORCE ON từng <code>Y</code> như ở bước B2. Đèn sáng đúng màu → toàn bộ chuỗi PLC → dây → bóng đèn đã tốt. Đèn không sáng → vấn đề nằm ở dây điện hoặc nguồn cấp đèn, hoàn toàn không phải phần mềm. Sửa xong mới đi tiếp.</p>
+    <p>Bước này quan trọng vì nó tách bạch dứt khoát: từ đây trở đi, nếu đèn không sáng thì chắc chắn lỗi nằm ở phía PC, không phải tủ điện.</p>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-n">E3</span> Kiểm tra kết nối MC Protocol</h3>
+    <p>Cài thư viện rồi khởi động server:</p>
+    <pre><code>pip install -r requirements.txt
+cd ultralytics
+uvicorn main:app --host 0.0.0.0 --port 8000</code></pre>
+    <p>Nhìn dòng log khi khởi động. Nếu thấy <code>[plc_light] Đã kết nối PLC…</code> là thành công. Nếu thấy <code>Không kết nối được PLC</code> thì kết nối bị từ chối — nguyên nhân phổ biến nhất theo thứ tự: sai port (nhớ cái bẫy HEX ở bước A3), chưa nạp tham số hoặc chưa reset PLC, hoặc chọn sai <code>PLC_TYPE</code>.</p>
+    <p>Bạn cũng có thể mở <code>http://localhost:8000/health</code> trên trình duyệt và xem trường <code>plc_connected</code>.</p>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-n">E4</span> Bắn thử từng màu bằng tay</h3>
+    <p>Mở lần lượt ba địa chỉ này trên trình duyệt, mỗi lần nhìn cột đèn:</p>
+    <pre><code>http://localhost:8000/plc-test?color=green
+http://localhost:8000/plc-test?color=yellow
+http://localhost:8000/plc-test?color=red</code></pre>
+    <p>Đây là bước xác minh cuối cùng trước khi chạy thật: nó đi qua <em>đúng</em> đường mà hệ thống nhận diện sẽ đi, chỉ khác là bạn tự kích hoạt thay vì để khuôn mặt kích hoạt.</p>
+    <p>Nếu sáng sai màu → hoán đổi lại địa chỉ trong <code>PLC_COILS</code>. Nếu không sáng nhưng E2 và E3 đều tốt → gần như chắc chắn sai địa chỉ <code>Y</code>, quay lại phase B.</p>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-n">E5</span> Chạy thật với người đứng trước camera</h3>
+    <p>Mở <code>http://localhost:8000</code>, cho một người đã enroll đứng trước cam1. Khi tên hiện lên web, đèn xanh phải sáng gần như đồng thời. Cho người đó đi qua cam2 — đèn vàng. Cho người chưa enroll đứng trước camera — đèn đỏ.</p>
+    <p>Đối chiếu với file Excel xuất ra: mỗi lần đèn sáng phải tương ứng một dòng trong nhật ký. Nếu đèn sáng mà Excel không có dòng nào (hoặc ngược lại), nghĩa là có gì đó sai ở tầng logic chứ không phải tầng giao tiếp.</p>
+  </div>
+</section>
+
+<hr class="rule">
+
+<!-- ══════════ TRA CỨU ══════════ -->
+<section class="phase" id="tra-cuu">
+  <div class="phase-head">
+    <div class="phase-mark">⌗</div>
+    <div class="phase-title">
+      <h2>Tra cứu nhanh</h2>
+      <p class="phase-sub">Bảng mã, lỗi thường gặp, và phiếu thông số</p>
+    </div>
+  </div>
+
+  <h3>Mã vùng nhớ trong khung 3E binary</h3>
+  <div class="prose">
+    <p>Khi <code>pymcprotocol</code> đóng gói lệnh, chữ cái vùng nhớ không đi trên dây dưới dạng ký tự — nó được mã hoá thành một byte. Bạn không cần dùng trực tiếp, nhưng sẽ cần khi bắt gói tin bằng Wireshark để chẩn đoán:</p>
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Vùng nhớ</th><th>Mã byte</th><th>Bản chất</th><th>PC ghi được?</th></tr></thead>
+      <tbody>
+        <tr><td><code>X</code> — ngõ vào</td><td class="num">0x9C</td><td>Cảm biến, nút nhấn thật</td><td>Không (phản ánh phần cứng)</td></tr>
+        <tr><td><code>Y</code> — ngõ ra</td><td class="num">0x9D</td><td>Điều khiển thiết bị thật</td><td>Có — tác động tức thì</td></tr>
+        <tr><td><code>M</code> — bit nội</td><td class="num">0x90</td><td>Biến trung gian trong ladder</td><td>Có — an toàn nhất</td></tr>
+        <tr><td><code>D</code> — thanh ghi</td><td class="num">0xA8</td><td>Số nguyên 16 bit</td><td>Có — dùng cho giá trị số</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose">
+    <p>Các mã lệnh chính: <code>0x1401</code> là ghi hàng loạt, kèm subcommand <code>0x0001</code> nghĩa là ghi theo đơn vị bit. Gói yêu cầu bắt đầu bằng subheader <code>0x5000</code>, gói phản hồi bắt đầu bằng <code>0xD000</code> và chứa mã kết thúc — <code>0x0000</code> là thành công. Hãy đối chiếu lại với manual <em>MELSEC Communication Protocol Reference</em> của đúng model bạn có trước khi dựa vào những con số này để chẩn đoán.</p>
+  </div>
+
+  <h3 style="margin-top:44px">Lỗi thường gặp</h3>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Hiện tượng</th><th>Nguyên nhân hay gặp nhất</th><th>Cách xử lý</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Ping được nhưng Python không kết nối</td>
+          <td>Sai port — thường do nhập thập phân vào ô HEX</td>
+          <td>Đổi <code>1388</code> ↔ <code>5000</code> cho khớp; nạp lại tham số và reset PLC</td>
+        </tr>
+        <tr>
+          <td>Kết nối được nhưng đèn không sáng</td>
+          <td>Sai địa chỉ <code>Y</code>, hoặc ladder ghi đè</td>
+          <td>FORCE ON trong GX Works để tìm địa chỉ thật; dùng <em>Find Device</em> tìm xung đột</td>
+        </tr>
+        <tr>
+          <td>Đèn chớp cực nhanh rồi tắt</td>
+          <td>Ladder tranh quyền ghi ngõ ra</td>
+          <td>Chuyển sang cách ghi qua <code>M</code> ở phase D</td>
+        </tr>
+        <tr>
+          <td>Ping không được</td>
+          <td>Khác dải mạng, cáp lỏng, hoặc tường lửa</td>
+          <td>Chạy <code>ipconfig</code> đối chiếu dải; kiểm tra đèn LINK trên module</td>
+        </tr>
+        <tr>
+          <td>Sáng nhầm màu</td>
+          <td>Ánh xạ <code>PLC_COILS</code> lệch với dây thật</td>
+          <td>Hoán vị lại ba giá trị trong <code>PLC_COILS</code></td>
+        </tr>
+        <tr>
+          <td>Chạy được một lúc rồi mất kết nối</td>
+          <td>Nhiễu mạng, hoặc PLC bị reset</td>
+          <td>Bình thường — code tự kết nối lại ở lệnh kế tiếp; kiểm tra chất lượng cáp nếu lặp lại nhiều</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 style="margin-top:44px">Phiếu thông số</h3>
+  <div class="prose">
+    <p>Điền vào phiếu này trong lúc làm phase A và B — đây chính xác là những giá trị bạn cần gõ vào <code>main.py</code>.</p>
+  </div>
+
+  <div class="sheet">
+    <h3>Thông số kết nối PLC</h3>
+    <p class="sheet-sub">Ghi lại khi cấu hình · dán vào tủ điện sau khi hoàn tất</p>
+
+    <div class="field"><label>Model CPU (nhãn trên thân)</label><span class="blank">………………………………………………</span></div>
+    <div class="field"><label><code>PLC_TYPE</code> → "Q" hoặc "iQ-R"</label><span class="blank">………………………………………………</span></div>
+    <div class="field"><label><code>PLC_IP</code> — IP module Ethernet</label><span class="blank">………………………………………………</span></div>
+    <div class="field"><label>Subnet mask</label><span class="blank">………………………………………………</span></div>
+    <div class="field"><label><code>PLC_PORT</code> — thập phân</label><span class="blank">………………………………………………</span></div>
+    <div class="field"><label>Cùng port, hệ HEX (cho GX Works2)</label><span class="blank">………………………………………………</span></div>
+    <div class="field"><label>IP của PC chạy main.py</label><span class="blank">………………………………………………</span></div>
+    <div class="field"><label>Địa chỉ <span class="dot g" style="display:inline-block;vertical-align:middle;margin-top:0"></span> đèn xanh</label><span class="blank">………………………………………………</span></div>
+    <div class="field"><label>Địa chỉ <span class="dot y" style="display:inline-block;vertical-align:middle;margin-top:0"></span> đèn vàng</label><span class="blank">………………………………………………</span></div>
+    <div class="field"><label>Địa chỉ <span class="dot r" style="display:inline-block;vertical-align:middle;margin-top:0"></span> đèn đỏ</label><span class="blank">………………………………………………</span></div>
+    <div class="field" style="border-bottom:none"><label>Ghi thẳng Y hay qua M?</label><span class="blank">………………………………………………</span></div>
+  </div>
+
+  <h3 style="margin-top:44px">Danh sách kiểm tra trước khi bàn giao</h3>
+  <ul class="check">
+    <li>Ping tới PLC có reply ổn định</li>
+    <li>FORCE ON từng Y làm sáng đúng màu tương ứng</li>
+    <li><code>/health</code> báo <code>plc_connected: true</code></li>
+    <li>Ba lệnh <code>/plc-test</code> đều sáng đúng màu, tắt sau khoảng 1,5 giây</li>
+    <li>Người đã enroll qua cam1 → đèn xanh; qua cam2 → đèn vàng</li>
+    <li>Người lạ → đèn đỏ</li>
+    <li>Số lần đèn sáng khớp với số dòng trong Excel xuất ra</li>
+    <li>Đã ghi chú vào tài liệu tủ điện rằng ba ngõ này do PC điều khiển</li>
+    <li>Đã điền đầy đủ phiếu thông số ở trên</li>
+  </ul>
+</section>
+
+<footer>
+  <p>Tài liệu kỹ thuật nội bộ · Hệ thống chấm công nhận diện khuôn mặt FaceRecog → đèn tháp qua PLC Mitsubishi.<br>
+  Các thông số mã lệnh và giới hạn dòng tải nên được đối chiếu lại với manual chính hãng của đúng model module bạn đang dùng.</p>
+</footer>
+
+</main>
+</div>

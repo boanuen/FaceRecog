@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from recognizer import FaceRecognizer, BASE_DIR, DB_PATH
+from plc_light import PLCLight
 
 executor = ThreadPoolExecutor(max_workers=3)
 
@@ -127,6 +128,20 @@ class CamState:
 
 _cam_states: dict = defaultdict(CamState)
 
+# ── ĐÈN THÁP (PLC Mitsubishi Q/iQ-R, MC Protocol qua Ethernet) ──────────────
+# Đổi PLC_IP/PLC_PORT theo module Ethernet thật của PLC (QJ71E71 / cổng built-in
+# iQ-R). Đổi PLC_TYPE thành "iQ-R" nếu dùng dòng iQ-R (mặc định "Q").
+# PLC_COILS: địa chỉ ngõ ra Y thật đấu tới từng màu đèn tháp — chỉnh lại cho khớp
+# tủ điện thực tế trước khi chạy thật.
+PLC_IP      = "192.168.1.10"      # TODO: IP thật của PLC
+PLC_PORT    = 5000                 # TODO: port MC Protocol cấu hình trên module Ethernet PLC
+PLC_TYPE    = "Q"                  # "Q" hoặc "iQ-R"
+PLC_COILS   = {"green": "Y0", "yellow": "Y1", "red": "Y2"}   # TODO: đúng địa chỉ Y thật
+PLC_PULSE_S = 1.5                  # thời gian đèn sáng mỗi lần báo (giây)
+
+plc = PLCLight(PLC_IP, PLC_PORT, PLC_COILS, plctype=PLC_TYPE, pulse_sec=PLC_PULSE_S)
+
+
 def _log_scan(person: str, status: str, cam: str, motion: str = "Đứng im"):
     _scan_log.append({"dt": datetime.now(), "person": person,
                       "role": rec.db_roles.get(person, "kỹ sư"),
@@ -134,6 +149,11 @@ def _log_scan(person: str, status: str, cam: str, motion: str = "Đứng im"):
                       "cam": CAMERAS.get(cam, cam)})
     if status == "OK":
         _log_attendance(person, cam)   # OK ở cam VÀO/RA → check-in/out (xem CAM_ROLE)
+        # báo đèn: cam VÀO (cam1) → xanh ; cam RA/check-out (cam2) → vàng
+        plc.signal("green" if CAM_ROLE.get(cam) == "vào" else "yellow")
+    else:
+        # FAIL (quen bỗng thành lạ) hoặc LẠ (người lạ) → đỏ
+        plc.signal("red")
 
 print(f"[main] Khởi tạo YOLO26 + ArcFace...")
 rec = FaceRecognizer(det_conf=CONF_DETECT)   # YOLO detect mặt, ArcFace nhận diện tên
@@ -338,7 +358,19 @@ def health():
         "people": rec.db_names,
         "db_size": 0 if rec.db_embs is None else int(rec.db_embs.shape[0]),
         "threshold": THRESHOLD,
+        "plc_connected": plc.connected,
     }
+
+
+@app.get("/plc-test")
+def plc_test(color: str = Query("green")):
+    """Bấm thử đèn tháp từ trình duyệt (debug đấu dây/địa chỉ Y trước khi chạy thật):
+    GET /plc-test?color=green | yellow | red"""
+    if color not in PLC_COILS:
+        return JSONResponse({"ok": False, "msg": f"Màu '{color}' không hợp lệ (green/yellow/red)"},
+                            status_code=400)
+    plc.signal(color)
+    return {"ok": True, "color": color, "device": PLC_COILS[color]}
 
 
 @app.post("/process-frame")
@@ -500,12 +532,12 @@ async def track_faces(
     tracks = st.tracks
     used, dets = set(), []
     for (x1, y1, x2, y2, conf) in boxes:
-        # TOẠ ĐỘ CHUẨN HOÁ [0,1] → CHUNG hệ với /process-frame (dù ảnh khác độ phân giải)
+        # TOẠ ĐỘ CHUẨN HOÁ [0,1] → CHUNG hệ với /process-frame 
         cxn, cyn = (x1 + x2) / 2 / W, (y1 + y2) / 2 / H
         wsn = (x2 - x1) / W
         bi = _match_track_idx(tracks, cxn, cyn, match_thr, used)
         if bi is None:
-            # /track TẠO track mới (nhanh) → chờ /process-frame gán tên.
+            # /track TẠO track mới → chờ /process-frame gán tên.
             t = _new_track(cxn, cyn, now)
             tracks.append(t); bi = len(tracks) - 1
         else:
@@ -664,15 +696,15 @@ def _sessions_from_events(events: list[dict]) -> list[dict]:
 def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
                 mode: str = "full") -> bytes:
     """
-    3 sheet: Ngay / Tuan / Thang. Giữ nguyên FORMAT.
+    3 sheet: Ngay / Tuan / Thang. 
     - mode="full": nhật ký đầy đủ (đứng im + di chuyển + fail/lạ).
     - mode="once": CHỈ nhận dạng mỗi người 1 lần (bỏ di chuyển, bỏ lặp, bỏ fail/lạ).
-    Tuan/Thang: bảng chấm công theo phiên (giữ nguyên).
+    Tuan/Thang
     """
     from openpyxl.utils import get_column_letter
 
     if mode == "once":
-        # chỉ giữ lần OK ĐẦU TIÊN của mỗi người → mỗi người đúng 1 dòng
+        # chỉ giữ lần OK ĐẦU TIÊN của mỗi người
         seen, filtered = set(), []
         for e in sorted(scans, key=lambda x: x["dt"]):
             if e["status"] == "OK" and e["person"] not in seen:
@@ -1047,7 +1079,7 @@ def export_attendance(mode: str = "full"):
     )
 
 
-# Các ảnh biểu đồ mà YOLO xuất ra sau khi train (nằm trong thư mục run).
+# Các ảnh biểu đồ mà YOLO xuất ra sau khi train.
 PLOT_FILES = [
     "confusion_matrix_normalized.png", "confusion_matrix.png",
     "results.png", "BoxPR_curve.png", "BoxF1_curve.png",
@@ -1067,7 +1099,7 @@ def find_runs():
 
 @app.get("/results/file")
 def results_file(run: str, f: str):
-    """Phục vụ 1 ảnh biểu đồ của 1 run (có kiểm tra an toàn đường dẫn)."""
+    """1 ảnh biểu đồ của 1 run."""
     runs = find_runs()
     d = runs.get(run)
     if not d or f not in PLOT_FILES:
@@ -1084,7 +1116,7 @@ def results_page(run: str = ""):
     runs = find_runs()
     if not runs:
         return "<body style='background:#0f172a;color:#e2e8f0;font-family:Arial;padding:40px'>" \
-               "<h2>Chưa có run nào (chưa train xong).</h2>" \
+               "<h2>Chưa có run nào</h2>" \
                "<a href='/' style='color:#38bdf8'>← Về trang nhận diện</a></body>"
     if run not in runs:
         run = next(iter(runs))  # mặc định: run mới nhất

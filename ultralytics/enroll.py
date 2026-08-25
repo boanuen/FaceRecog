@@ -1,12 +1,6 @@
 """
-enroll.py — Tạo DB embedding cho 5 người TỪ dữ liệu đã gán nhãn (train + valid).
-
-Với mỗi ảnh, cắt đúng GT box theo nhãn → FaceNet embedding → gom theo người.
-KHÔNG cần chụp ảnh mới, KHÔNG train lại. Kết quả: face_db.pt
-
 Sau khi gom xong, script tự tính độ tách giữa (cùng người) và (khác người)
 để GỢI Ý ngưỡng cosine hợp lý cho main.py.
-
 """
 import os, glob, random
 import cv2, torch
