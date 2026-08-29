@@ -70,10 +70,11 @@ Server sẽ chạy tại: `http://localhost:8000`
 
 - **Web UI**: Mở `http://localhost:8000` trên trình duyệt
 - **Export Excel**: Nhấn nút export trên web, file Excel sẽ tải về
-- **API endpoints**:
-  - `POST /process-frame` - xử lý frame webcam
-  - `POST /log-event` - ghi nhật ký vào/ra
-  - `GET /export` - xuất Excel 3 sheet (Ngày/Tuần/Tháng)
+- **API endpoints** (danh sách đầy đủ trong [README.md](README.md)):
+  - `POST /process-frame` - nhận diện đầy đủ một frame
+  - `POST /track` - chỉ bám khung mặt
+  - `POST /capture` - thêm mẫu ảnh cho một người
+  - `GET /export?mode=full|once` - xuất Excel 3 sheet (Ngày/Tuần/Tháng)
   - `GET /health` - kiểm tra server
 
 ## Troubleshooting
