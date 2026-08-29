@@ -37,6 +37,19 @@
         }
         @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(74,222,128,.5)} 70%{box-shadow:0 0 0 7px rgba(74,222,128,0)} 100%{box-shadow:0 0 0 0 rgba(74,222,128,0)} }
 
+        /* Đèn tháp PLC (trạng thái lấy từ /plc-status) */
+        .tower { display:flex; align-items:center; gap:14px; width:fit-content; margin:0 auto 22px;
+                 padding:12px 22px; background:rgba(15,23,42,.55); border:1px solid var(--border); border-radius:16px; }
+        .tower-lamps { display:flex; flex-direction:column; gap:6px; }
+        .tower-lamp { width:26px; height:26px; border-radius:50%; background:#1e293b;
+                      border:2px solid rgba(148,163,184,.25); transition:all .15s ease; }
+        .tower-lamp.red.on    { background:#ef4444; border-color:#fca5a5; box-shadow:0 0 16px 4px rgba(239,68,68,.85); }
+        .tower-lamp.yellow.on { background:#fbbf24; border-color:#fde68a; box-shadow:0 0 16px 4px rgba(251,191,36,.85); }
+        .tower-lamp.green.on  { background:#22c55e; border-color:#86efac; box-shadow:0 0 16px 4px rgba(34,197,94,.85); }
+        .tower-label { font-size:13px; color:var(--muted); line-height:1.5; }
+        .tower-label b { color:#cbd5e1; }
+        .tower-label .offline { color:#f87171; }
+
         .layout { display: flex; gap: 20px; max-width: 1560px; margin: 0 auto; align-items: flex-start; flex-wrap: wrap; }
         .left  { flex: 3 1 900px; min-width: 320px; }
         .right { flex: 1 1 350px; min-width: 300px; display: flex; flex-direction: column; gap: 16px; }
@@ -118,13 +131,25 @@
     <div class="subtitle">Engine: <b>YOLO26</b></div>
     <div id="status-tag" class="status">Đang kết nối Camera...</div>
 
+    <div class="tower" id="tower">
+        <div class="tower-lamps">
+            <div class="tower-lamp red" id="lamp-red"></div>
+            <div class="tower-lamp yellow" id="lamp-yellow"></div>
+            <div class="tower-lamp green" id="lamp-green"></div>
+        </div>
+        <div class="tower-label">
+            Đèn tháp PLC<br>
+            <b id="tower-status">đang kiểm tra...</b>
+        </div>
+    </div>
+
     <div class="layout">
         <!-- CỘT TRÁI: 2 camera song song -->
         <div class="left">
             <div class="cams-row" style="display:flex;gap:14px;flex-wrap:wrap;">
                 <!-- CAMERA 1 -->
                 <div class="card" style="flex:1 1 420px;min-width:340px;">
-                    <h3>📷 Camera 1 · <span style="color:#38bdf8">UGreen 2K</span> · <span style="color:#4ade80">Check-in (Vào)</span></h3>
+                    <h3>Camera 1 · <span style="color:#38bdf8">UGreen 2K</span> · <span style="color:#4ade80">Check-in (Vào)</span></h3>
                     <div class="display-box" style="position:relative;">
                         <video id="v1" autoplay playsinline muted
                                style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none;"></video>
@@ -140,7 +165,7 @@
                 </div>
                 <!-- CAMERA 2 -->
                 <div class="card" style="flex:1 1 420px;min-width:340px;">
-                    <h3>📷 Camera 2 · <span style="color:#c084fc">Rapoo C260</span> · <span style="color:#f87171">Check-out (Ra)</span></h3>
+                    <h3>Camera 2 · <span style="color:#c084fc">Rapoo C260</span> · <span style="color:#f87171">Check-out (Ra)</span></h3>
                     <div class="display-box" style="position:relative;">
                         <video id="v2" autoplay playsinline muted
                                style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none;"></video>
@@ -166,27 +191,27 @@
                 <div class="slider">
                     <div class="slider-top"><span>Người quen ≥</span><b id="ck-val">0.30</b></div>
                     <input type="range" id="ck" min="0.20" max="0.95" step="0.01" value="0.30">
-                    <div class="hint">Cao → chắc chắn mới nhận tên (ít nhầm, dễ báo "lạ").<br>
-                        <span style="color:#c084fc">Camera 2 (Rapoo)</span> tự siết chặt hơn (ngưỡng +0.07, cần cách người nhì ≥0.05) + bù cân sáng/nét (CLAHE + unsharp) do fixed-focus, không HDR. Lắp cao chiếu xuống nên vẫn nên enroll mẫu bằng chính cam này khi có đủ người.<br>
-                        Cả 2 cam đều lọc khung <b>mờ do di chuyển</b> trước khi nhận diện (không tính phiếu) — cam2 nới ngưỡng mờ hơn vì ảnh vốn mềm sẵn.</div>
+                    <div class="hint">Cao thì phải chắc chắn mới nhận tên (ít nhầm, dễ báo "lạ").<br>
+                        <span style="color:#c084fc">Camera 2 (Rapoo)</span> tự siết chặt hơn (ngưỡng +0.07, cần cách người nhì ≥0.05) và được bù cân sáng/độ nét (CLAHE + unsharp) do fixed-focus, không HDR.<br>
+                        Cả 2 cam đều lọc khung <b>mờ do di chuyển</b> trước khi nhận diện; cam2 nới ngưỡng mờ hơn vì ảnh vốn mềm sẵn.</div>
                 </div>
                 <div class="slider">
                     <div class="slider-top"><span>Bắt mặt ≥</span><b id="cd-val">0.25</b></div>
                     <input type="range" id="cd" min="0.05" max="0.60" step="0.01" value="0.25">
-                    <div class="hint">Thấp → bắt cả mặt mờ/xa (nhiều khung hơn).</div>
+                    <div class="hint">Thấp thì bắt cả mặt mờ/xa (nhiều khung hơn).</div>
                 </div>
             </div>
 
             <div class="card" style="margin-top:16px;">
                 <h3>Nguyên lý hoạt động</h3>
-                <div class="step"><div class="n">1</div><div class="tx">Mỗi camera gửi <b>2 luồng song song</b> lên server: <b>/track</b> (nhanh ~10fps, chỉ tìm VỊ TRÍ khung mặt, chưa đoán tên) để khung bám sát mượt mắt, và <b>/process-frame</b> (thưa hơn) để nhận diện tên THẬT.</div></div>
-                <div class="step"><div class="n">2</div><div class="tx"><b>YOLO26</b> khoanh mọi khuôn mặt có trong khung hình.</div></div>
-                <div class="step"><div class="n">3</div><div class="tx"><b>ArcFace</b> cắt lại đúng vùng mặt từ ẢNH GỐC (không phải ảnh đã thu nhỏ), tự căn theo 5 điểm mốc (mắt/mũi/miệng) rồi biến thành vector 512 số — coi như "vân tay" khuôn mặt. Camera ảnh mềm/thiếu sáng (Rapoo, không AF/HDR) được cân sáng cục bộ (CLAHE) + làm nét (unsharp) NGAY TRƯỚC bước này để bù phần cứng yếu hơn.</div></div>
-                <div class="step"><div class="n">4</div><div class="tx">So <b>cosine</b> vector đó với MỌI mẫu đã đăng ký trong DB → ra người giống nhất (top-1) và giống nhì (top-2).</div></div>
-                <div class="step"><div class="n">5</div><div class="tx">2 lớp gác trước khi nhận tên: top-1 phải đạt <b>ngưỡng cosine</b> (mỗi camera 1 ngưỡng riêng — camera ảnh kém đòi ngưỡng cao hơn) <b>VÀ</b> phải cách xa top-2 đủ mức (tránh nhận nhầm khi 2 người quen bị lẫn điểm). Thiếu 1 trong 2 → <b class="pill-r">chưa chắc</b>, không gán tên bừa.</div></div>
-                <div class="step"><div class="n">6</div><div class="tx"><b>Làm mượt theo thời gian</b>: mỗi khuôn mặt được bám theo 1 "track" riêng qua nhiều khung liên tiếp; một danh tính phải chiếm ĐA SỐ phiếu trong ~5 khung gần nhất mới được gán → không bị nhấp nháy <b class="pill-g">Người quen</b> ↔ <b class="pill-r">Người lạ</b>.</div></div>
-                <div class="step"><div class="n">7</div><div class="tx">Ghi nhật ký: <b>đứng im</b> đủ 2 giây → ghi 1 lần duy nhất; <b>di chuyển</b> → ghi mỗi lần đổi trạng thái. Xuất Excel theo Ngày / Tuần / Tháng.</div></div>
-                <div class="step"><div class="n">8</div><div class="tx">Check-in/out theo ĐÚNG camera nhận ra người: <b style="color:#4ade80">Camera 1 (UGreen)</b> = cổng <b>vào</b>, <b style="color:#f87171">Camera 2 (Rapoo)</b> = cổng <b>ra</b> — không còn suy luận qua việc "đang được thấy" gộp cả 2 cam.</div></div>
+                <div class="step"><div class="n">1</div><div class="tx">Mỗi camera gửi <b>2 luồng song song</b> lên server: <b>/track</b> (~10fps, chỉ tìm vị trí khung mặt) để khung bám sát, và <b>/process-frame</b> (thưa hơn) để nhận diện tên.</div></div>
+                <div class="step"><div class="n">2</div><div class="tx"><b>YOLO26</b> khoanh mọi khuôn mặt trong khung hình.</div></div>
+                <div class="step"><div class="n">3</div><div class="tx"><b>ArcFace</b> cắt lại vùng mặt từ ảnh gốc, căn theo 5 điểm mốc (mắt, mũi, miệng) rồi chuyển thành vector 512 chiều, coi như "vân tay" khuôn mặt. Camera thiếu AF/HDR (Rapoo) được cân sáng cục bộ (CLAHE) và làm nét (unsharp) ngay trước bước này.</div></div>
+                <div class="step"><div class="n">4</div><div class="tx">So <b>cosine</b> vector đó với mọi mẫu trong DB để ra người giống nhất (top-1) và giống nhì (top-2).</div></div>
+                <div class="step"><div class="n">5</div><div class="tx">2 điều kiện trước khi nhận tên: top-1 phải đạt <b>ngưỡng cosine</b> (mỗi camera một ngưỡng riêng) và phải cách top-2 đủ xa (tránh lẫn 2 người quen). Thiếu một trong hai thì coi là <b class="pill-r">chưa chắc</b>.</div></div>
+                <div class="step"><div class="n">6</div><div class="tx"><b>Làm mượt theo thời gian</b>: mỗi khuôn mặt được bám theo một "track" riêng; một danh tính phải chiếm đa số phiếu trong ~5 khung gần nhất mới được gán, tránh nhấp nháy <b class="pill-g">Người quen</b> / <b class="pill-r">Người lạ</b>.</div></div>
+                <div class="step"><div class="n">7</div><div class="tx">Ghi nhật ký: <b>đứng im</b> đủ 2 giây thì ghi 1 lần; <b>di chuyển</b> thì ghi mỗi lần đổi trạng thái. Xuất Excel theo Ngày / Tuần / Tháng.</div></div>
+                <div class="step"><div class="n">8</div><div class="tx">Check-in/out theo camera nhận ra người: <b style="color:#4ade80">Camera 1 (UGreen)</b> là cổng <b>vào</b>, <b style="color:#f87171">Camera 2 (Rapoo)</b> là cổng <b>ra</b>.</div></div>
             </div>
         </div>
 
@@ -206,15 +231,15 @@
 
             <div class="card">
                 <h3>Thêm / Quản lý người</h3>
-                <div style="font-size:12px;color:#94a3b8;margin-bottom:8px;">Go ten (co the la <b>nguoi moi</b>) roi bam nut chup — dua mat vao camera. Khong can train.</div>
+                <div style="font-size:12px;color:#94a3b8;margin-bottom:8px;">Gõ tên (có thể là <b>người mới</b>) rồi bấm nút chụp và đưa mặt vào camera. Không cần train.</div>
                 <input id="cap-person" list="people-list" class="select-cam" placeholder="Tên người (vd: tui, hoặc tên mới)" autocomplete="off"
                        style="width:100%;padding:8px;box-sizing:border-box;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;">
                 <datalist id="people-list"></datalist>
                 <select id="cap-role" style="width:100%;padding:8px;margin-top:8px;box-sizing:border-box;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;font-size:14px;">
-                    <option value="kĩ sư">Nhân viên</option>
+                    <option value="kỹ sư">Nhân viên</option>
                     <option value="sinh viên">Sinh viên</option>
                 </select>
-                <button class="btn" style="background:#8b5cf6;width:100%;margin-top:8px;" onclick="captureSample()">Chup mau (them vao DB)</button>
+                <button class="btn" style="background:#8b5cf6;width:100%;margin-top:8px;" onclick="captureSample()">Chụp mẫu (thêm vào DB)</button>
                 <div id="cap-status" style="font-size:13px;color:#94a3b8;margin-top:8px;text-align:center;">Chưa chụp mẫu nào</div>
                 <div style="font-size:12px;color:#94a3b8;margin:12px 0 6px;border-top:1px solid #334155;padding-top:10px;">Người trong hệ thống:</div>
                 <div id="people-box" style="font-size:13px;color:#cbd5e1;">Đang tải...</div>
@@ -230,16 +255,13 @@
         ckSlider.oninput = () => ckVal.innerText = parseFloat(ckSlider.value).toFixed(2);
         cdSlider.oninput = () => cdVal.innerText = parseFloat(cdSlider.value).toFixed(2);
 
-        const TRACK_INTERVAL_MS = 100;   // /track ~10fps → khung bám sát
-        const RECOG_INTERVAL_MS = 300;   // /process-frame ~3fps → nhận diện tên
-        const RECOG_INTERVAL_MAX_MS = 900;   // trần cho auto-throttle dynRecog — CPU bận (2 cam
-                                              // cùng lúc) từng làm khoảng cách nhận diện vọt lên
-                                              // vài giây, người đi qua rời khung trước khi tích đủ
-                                              // phiếu để được gán tên. Giữ trần để vẫn kịp bắt người
-                                              // di chuyển ngay cả khi máy đang tải nặng.
+        const TRACK_INTERVAL_MS = 100;   // /track ~10fps để khung bám sát
+        const RECOG_INTERVAL_MS = 300;   // /process-frame ~3fps để nhận diện tên
+        const RECOG_INTERVAL_MAX_MS = 900;   // trần cho auto-throttle dynRecog, để vẫn kịp bắt
+                                              // người di chuyển khi máy tải nặng
         const DRAW_INTERVAL_MS  = 66;    // vẽ khung ~15fps
 
-        // ── NHẬT KÝ UI (gộp 2 camera, gắn tên camera) ──
+        // Nhật ký hiển thị trên UI, gộp cả 2 camera
         function addScanLog(ev) {
             if (logBox.querySelector('.empty')) logBox.innerHTML = '';
             const map = { "OK": ["#4ade80","OK"], "FAIL": ["#f87171","FAIL"], "LẠ": ["#fbbf24","LẠ"] };
@@ -257,7 +279,30 @@
             loadPeople();
             await getCameraList();
             startAll();
+            pollPlcStatus();
+            setInterval(pollPlcStatus, 120);   // poll nhanh cho khớp đèn thật
         };
+
+        // Đèn tháp PLC: đọc trạng thái từ /plc-status, không tự suy luận màu ở frontend.
+        const LAMP_NAMES = { red: "Đỏ (lỗi / người lạ)", yellow: "Vàng (OK - ra)", green: "Xanh (OK - vào)" };
+        async function pollPlcStatus() {
+            try {
+                const d = await (await fetch('/plc-status')).json();
+                for (const c of ['red', 'yellow', 'green']) {
+                    $('lamp-' + c).classList.toggle('on', d.color === c);
+                }
+                const st = $('tower-status');
+                if (!d.connected) {
+                    st.innerHTML = '<span class="offline">PLC chưa kết nối</span> (đèn phần mềm vẫn đúng logic)';
+                } else if (d.color) {
+                    st.textContent = LAMP_NAMES[d.color] || d.color;
+                } else {
+                    st.textContent = 'đã kết nối — chờ sự kiện';
+                }
+            } catch (e) {
+                $('tower-status').innerHTML = '<span class="offline">Không gọi được /plc-status</span>';
+            }
+        }
 
         function setStatus(txt, bg, fg) {
             statusTag.innerText = txt; statusTag.style.background = bg; statusTag.style.color = fg;
@@ -277,7 +322,7 @@
                         sel.appendChild(o);
                     });
                 }
-                // tự chọn: Camera 1 = UGreen, Camera 2 = Rapoo/C260 (nếu nhận ra tên)
+                // tự chọn Camera 1 = UGreen, Camera 2 = Rapoo/C260 nếu nhận ra tên
                 const iU = devs.findIndex(d => /ugreen/i.test(d.label));
                 const iR = devs.findIndex(d => /rapoo|c260/i.test(d.label));
                 if (iU >= 0) $('sel1').selectedIndex = iU;
@@ -296,7 +341,7 @@
             setStatus("Đã tắt camera", "#991b1b", "#f87171");
         }
 
-        // ── Quản lý người: tải danh sách, hiện chip + nút xoá, đổ vào datalist ──
+        // Quản lý người: hiện danh sách kèm nút xoá và đổ vào datalist
         function renderPeople(people) {
             let box = document.getElementById('people-box');
             let dl  = document.getElementById('people-list');
@@ -319,7 +364,7 @@
                         </select>
                         <button onclick="toggleSamples('${p.name}')" title="Xem/xoá từng mẫu (tìm mẫu enroll nhầm)"
                             style="background:#334155;color:#cbd5e1;border:none;border-radius:5px;padding:3px 8px;cursor:pointer;font-size:12px;flex-shrink:0;">Mẫu</button>
-                        <button onclick="removePerson('${p.name}')" title="Xoa nguoi nay"
+                        <button onclick="removePerson('${p.name}')" title="Xoá người này"
                             style="background:#7f1d1d;color:#fecaca;border:none;border-radius:5px;padding:3px 9px;cursor:pointer;font-size:13px;flex-shrink:0;">X</button>
                     </div>
                     <div id="samp-${encodeURIComponent(p.name)}" style="display:none;padding:0 8px 8px;font-size:12px;"></div>
@@ -327,7 +372,7 @@
             dl.innerHTML = people.map(p => `<option value="${p.name}">`).join('');
         }
 
-        // ── Chẩn đoán mẫu: tự-khớp thấp + giống người KHÁC cao → nghi enroll nhầm ──
+        // Chẩn đoán mẫu: tự-khớp thấp và giống người khác cao thì nghi enroll nhầm
         async function loadSamples(name) {
             let el = document.getElementById('samp-' + encodeURIComponent(name));
             if (!el) return;
@@ -337,7 +382,7 @@
                 let d = await (await fetch('/people/samples?person=' + encodeURIComponent(name))).json();
                 if (!d.samples.length) { el.innerHTML = '<span style="color:#94a3b8">Không có mẫu</span>'; return; }
                 el.innerHTML = d.samples.map(s => {
-                    const suspicious = s.self_sim < 0.35;   // gợi ý trực quan, không tự xoá
+                    const suspicious = s.self_sim < 0.35;   // chỉ tô màu gợi ý, không tự xoá
                     const other = s.closest_other
                         ? `giống nhất: <b>${s.closest_other}</b> ${Math.round(s.closest_score * 100)}%`
                         : 'mẫu duy nhất';
@@ -363,7 +408,7 @@
             try {
                 let d = await (await fetch('/remove-sample', { method: 'POST', body: fd })).json();
                 renderPeople(d.people);
-                if (d.people.some(p => p.name === name)) loadSamples(name);   // mở lại, index đã dịch lại
+                if (d.people.some(p => p.name === name)) loadSamples(name);   // tải lại vì index đã đổi
             } catch (e) {}
         }
 
@@ -371,7 +416,7 @@
             try {
                 let d = await (await fetch('/people')).json();
                 renderPeople(d.people);
-            } catch (e) { /* server chưa sẵn sàng */ }
+            } catch (e) { /* server chưa sẵn sàng, bỏ qua */ }
         }
 
         async function updateRole(name, role) {
@@ -430,10 +475,10 @@
             }, 'image/jpeg', 0.92);
         }
 
-        // ── LỚP CAMERA: mỗi camera 1 luồng ĐỘC LẬP (khung nhanh + tên thưa) ──
-        //  • trackLoop  → /track (YOLO) ~10fps: khung bám sát; gửi kèm 'cam' id.
-        //  • recogLoop  → /process-frame (ArcFace) thưa: cập nhật tên + log; server tách state theo cam.
-        //  • drawLoop   → vẽ khung lên overlay của chính camera đó.
+        // Lớp Camera: mỗi camera chạy 3 vòng lặp độc lập.
+        //   trackLoop: gọi /track ~10fps để khung bám sát.
+        //   recogLoop: gọi /process-frame thưa hơn để cập nhật tên và ghi log.
+        //   drawLoop : vẽ khung lên overlay của camera đó.
         class Cam {
             constructor(id, video, overlay, sel, ph, fps, face, ms) {
                 this.id = id; this.video = video; this.overlay = overlay;
@@ -449,9 +494,8 @@
             async start() {
                 this.stop();
                 const dev = this.select.value;
-                // Ép ĐỘ PHÂN GIẢI GỐC tối đa của mỗi cam — nếu không ép, trình duyệt có thể tự
-                // chọn mức thấp hơn khả năng thật (nhất là USB 2.0 như Rapoo), làm mặt bị bé/mờ
-                // oan khi lên ArcFace. 'ideal' chỉ là gợi ý, cam không đạt vẫn chạy bình thường.
+                // Yêu cầu độ phân giải cao cho mỗi cam, không thì trình duyệt hay tự chọn mức
+                // thấp làm mặt bị nhỏ/mờ khi lên ArcFace. 'ideal' chỉ là gợi ý.
                 const RES = { cam1: { width: 2560, height: 1440 }, cam2: { width: 1920, height: 1080 } };
                 const res = RES[this.id] || RES.cam1;
                 try {

@@ -25,88 +25,68 @@ executor = ThreadPoolExecutor(max_workers=3)
 
 app = FastAPI(title="YOLO26 + ArcFace Face Recognition")
 
-#   YOLO26 (best.pt)  → phát hiện + khoanh mặt   (DETECTOR)
-#   ArcFace           → embedding 512-d mỗi mặt  (NHẬN DIỆN)
-#   Cosine vs face_db.pt → ra tên, hoặc "người lạ" nếu không đủ gần
+#   YOLO26 (best.pt)      -> phát hiện và khoanh mặt
+#   ArcFace              -> embedding 512 chiều cho mỗi mặt
+#   Cosine với face_db.pt -> ra tên, hoặc "người lạ" nếu không đủ gần
 
 
-CONF_DETECT = 0.25   # ngưỡng YOLO BẮT mặt (để thấp để không bỏ sót)
-THRESHOLD   = 0.28   # ngưỡng COSINE (matcher top-5 mean): >= coi là người quen.
-                     # Đo trên test: 100% đúng ở 0.25-0.28, 0 nhầm danh tính. Xem eval_recognition.py.
+CONF_DETECT = 0.25   # ngưỡng YOLO bắt mặt (để thấp cho đỡ bỏ sót)
+THRESHOLD   = 0.28   # ngưỡng cosine (trung bình top-5): >= coi là người quen.
+                     # Đo trên test: đúng 100% ở khoảng 0.25-0.28. Xem eval_recognition.py.
 
-# ── LÀM MƯỢT THEO THỜI GIAN
-# Quyết định = làm mượt điểm số trên vài frame gần nhất của CÙNG một mặt (ghép theo vị trí).
-# Nhỏ hơn → nhận ra NHANH hơn cho người đi qua; lớn hơn → ổn định hơn cho người đứng im.
+# Số frame gần nhất của cùng một mặt dùng để làm mượt điểm số. Nhỏ thì nhận ra
+# nhanh hơn với người đi qua, lớn thì ổn định hơn với người đứng im.
 SMOOTH_WINDOW = 5
 
-# Enroll trực tiếp từ webcam: /capture thêm embedding của mặt vào DB (không cần train).
+# Danh sách người đã enroll sẵn (có thể thêm người mới qua /capture, không cần train).
 KNOWN_PEOPLE = ["nghia", "quan", "son", "tri", "tui"]
 
-# ── NHẬT KÝ RA VÀO (lưu toàn bộ phiên, export ra Excel — dùng cho sheet Tuần/Tháng) ──
+# Nhật ký ra vào, dùng cho sheet Tuần/Tháng khi export Excel.
 # Mỗi entry: {dt, type, person, role, duration_min, ks_present, sv_present, total_ks, total_sv}
-# Check-in/check-out TÁCH THEO CAMERA (như cổng vào/cổng ra vật lý) chứ không suy từ việc
-# "ai đang được thấy" gộp cả 2 cam — xem CAM_ROLE + _log_attendance().
+# Check-in/check-out tách theo camera (xem CAM_ROLE, _log_attendance).
 _attendance_log: list[dict] = []
-_in_room: dict[str, datetime] = {}   # name → thời điểm vào phòng
+_in_room: dict[str, datetime] = {}   # name -> thời điểm vào phòng
 
-# ── NHẬT KÝ QUÉT MẶT (mỗi lần 1 track ĐỔI trạng thái — dùng cho sheet Ngày) ──
-# Mỗi entry: {dt, person, role, status}  status ∈ {"OK","FAIL","LẠ"}
-#   OK   = một track nhận ra người quen (đứng im hay đi qua → chỉ ghi 1 lần/track)
-#   FAIL = track đang là người quen X bỗng thành "người lạ" (nhận dạng hỏng)
-#   LẠ   = người lạ hoàn toàn xuất hiện
-# motion ∈ {"Đứng im","Di chuyển"} — trạng thái chuyển động của mặt lúc xảy ra sự kiện.
-_scan_log: list[dict] = []   # mỗi entry kèm "cam" (camera nào sinh ra sự kiện)
+# Nhật ký quét mặt, dùng cho sheet Ngày. Mỗi entry: {dt, person, role, status, motion, cam}
+#   status: OK   = nhận ra người quen (mỗi track chỉ ghi 1 lần)
+#           FAIL = đang là người quen X bỗng thành người lạ (nhận diện lỗi)
+#           LẠ   = người lạ hoàn toàn
+#   motion: "Đứng im" | "Di chuyển"
+_scan_log: list[dict] = []
 
-# ── TRẠNG THÁI TRACK THEO TỪNG CAMERA ──
-# 2 camera = 2 luồng độc lập → state tracking RIÊNG cho mỗi cam (mặt cam1 không lẫn cam2).
-CAMERAS = {"cam1": "UGreen 2K", "cam2": "Rapoo C260"}   # id → tên hiển thị
+# 2 camera chạy 2 luồng độc lập, mỗi camera có state tracking riêng.
+CAMERAS = {"cam1": "UGreen 2K", "cam2": "Rapoo C260"}   # id -> tên hiển thị
 
-# ── SIẾT NHẬN DIỆN RIÊNG TỪNG CAMERA (chống NHẬN SAI) ──
-# Rapoo C260 (cam2) cho ảnh MỀM/NHIỄU hơn UGreen 2K → cosine "lưng chừng" nhiều → dễ gán
-# NHẦM tên (người A thành B) hoặc nhận bừa người lạ. Với cam đó, siết chặt hơn cam1:
-#   thr_bump : CỘNG thêm vào ngưỡng cosine người-quen (chỉ nhận khi thật giống).
-#   margin   : top-1 phải hơn top-2 ÍT NHẤT chừng này; sát nhau → coi frame CHƯA CHẮC
-#              (để bộ làm mượt tự quyết), đây là đòn chính chống nhầm 2 người quen với nhau.
-#
-# HỆ SỐ cam2 suy từ chênh THÔNG SỐ so với UGreen 2K (không đoán mò):
-#   EQI = (1/FOV)·focus·hdr    focus: AF=1.0 / fixed=0.85   hdr: có=1.0 / không=0.90
-#     UGreen(nền) = (1/80)·1.00·1.00 = 0.01250   [4MP, 2K, AF, HDR]
-#     Rapoo       = (1/95)·0.85·0.90 = 0.00805   [2MP, 1080p, fixed-focus, không HDR, góc 95°]
-#   Q = 1.55 → Rapoo mất ~36% chất lượng hiệu dụng.
-#   bump = deficit(0.36) × headroom(~0.20) ≈ 0.07 ;  margin ≈ 0.7·bump ≈ 0.05.
-# cam1 để 0/0 → GIỮ NGUYÊN hành vi cũ. Đây là điểm KHỞI ĐẦU có căn cứ — vẫn nên soi Excel
-# "người lạ/fail" rồi nhích nếu còn nhầm (tăng) hay bị miss người thật (giảm).
+# Siết nhận diện riêng cho từng camera. Rapoo C260 (cam2) cho ảnh mềm hơn UGreen 2K
+# nên dễ gán nhầm tên. Với cam2:
+#   thr_bump : cộng thêm vào ngưỡng cosine người quen.
+#   margin   : top-1 phải hơn top-2 ít nhất chừng này, nếu không thì coi frame là
+#              chưa chắc và để bộ làm mượt tự quyết.
+# cam1 để 0/0 nên giữ nguyên hành vi cũ. Đây là giá trị khởi đầu, nên soi lại Excel
+# người lạ/fail rồi chỉnh nếu còn nhầm hoặc bị miss.
 CAM_TUNE = {
     "cam1": {"thr_bump": 0.00, "margin": 0.00},
     "cam2": {"thr_bump": 0.07, "margin": 0.05},
 }
 
-# ── CAMERA NÀO = CỔNG VÀO, CAMERA NÀO = CỔNG RA ──
-# UGreen (cam1) đặt ở lối VÀO, Rapoo (cam2) đặt ở lối RA. Check-in/out do đó gán THẲNG theo
-# camera nhận ra người — không suy luận qua "người này có đang được nhìn thấy hay không" gộp
-# cả 2 cam (cách cũ dễ lẫn: ai đó chỉ lướt qua cam RA mà chưa từng vào vẫn bị tính "vào").
+# UGreen (cam1) đặt ở lối vào, Rapoo (cam2) đặt ở lối ra. Check-in/out gán thẳng
+# theo camera nhận ra người.
 CAM_ROLE = {"cam1": "vào", "cam2": "ra"}
 
-# ── LỌC MẶT MỜ TRƯỚC KHI CHẠY ArcFace (chống NHẬN SAI do motion-blur) ──
-# ArcFace vẫn "chạy được" trên ảnh mờ nhưng cho embedding kém tin cậy → dễ nhận NHẦM người quen
-# A thành B (khác với "người lạ" — đây là lỗi nặng hơn). Cùng nguyên lý các kiosk nhận diện
-# (như Vinwonders): chỉ MATCH trên khung ĐỦ NÉT, khung mờ thì bỏ qua phiếu (không chạy ArcFace,
-# không tính vào cửa sổ làm mượt) — track vẫn bám vị trí, đợi khung nét hơn (vài trăm ms sau)
-# mới nhận. Đo bằng phương sai Laplacian trên vùng mặt resize chuẩn 100x100 (độc lập khoảng
-# cách gần/xa camera). Rapoo (cam2) vốn mềm hơn (fixed-focus) → ngưỡng thấp hơn cam1, nếu không
-# sẽ bỏ qua gần hết khung của cam2.
+# Lọc mặt mờ (motion blur) trước khi chạy ArcFace. Ảnh mờ vẫn ra được embedding
+# nhưng kém tin cậy nên dễ nhận nhầm người quen này thành người quen khác. Khung mờ
+# thì bỏ qua, không tính phiếu, track vẫn bám vị trí và chờ khung nét hơn. Đo bằng
+# phương sai Laplacian trên vùng mặt resize 100x100. Rapoo (cam2) vốn mềm hơn nên
+# ngưỡng thấp hơn cam1.
 BLUR_THR = {"cam1": 60.0, "cam2": 35.0}
-SKIP_VOTE = "__SKIP__"   # sentinel best_name: khung bị lọc mờ, KHÔNG tính là phiếu "lạ"/"chưa chắc"
+SKIP_VOTE = "__SKIP__"   # best_name khi khung bị lọc mờ: không tính là phiếu
 
-# ── BÙ ẢNH MỀM/THIẾU SÁNG (chỉ cam thiếu AF/HDR — KHÔNG đụng vùng nhìn) ──
-# Rapoo không HDR (dễ cháy/tối chỗ sáng-tối lệch, nhất là lắp trên cao chiếu xuống → trán
-# sáng, phần dưới mặt tối) + fixed-focus (ảnh mềm hơn AF). Bù trực tiếp lên ẢNH GỐC ĐẦY ĐỦ
-# (không crop — giữ nguyên toàn bộ khung nhìn) TRƯỚC khi đưa vào YOLO **và** ArcFace, nên
-# tác động thẳng vào pixel mà ArcFace thực sự tạo embedding — khác lần crop trước (crop chỉ
-# đổi input YOLO, không hề chạm tới ArcFace vì ArcFace tự cắt lại từ ảnh gốc).
-#   CLAHE (kênh L của LAB) → cân sáng CỤC BỘ, bù thiếu HDR.
-#   Unsharp mask nhẹ       → bù mềm do fixed-focus.
-# cam1 đã có AF+HDR phần cứng lo rồi → False, không xử lý thêm (tránh xử lý dư làm hại ảnh tốt).
+# Bù sáng và độ nét cho camera thiếu AF/HDR. Rapoo không có HDR (dễ cháy/tối khi
+# sáng-tối lệch) và fixed-focus (ảnh mềm). Xử lý trên ảnh gốc trước khi đưa vào YOLO
+# và ArcFace:
+#   CLAHE (kênh L của LAB) -> cân sáng cục bộ, bù thiếu HDR.
+#   Unsharp mask nhẹ       -> bù mềm do fixed-focus.
+# cam1 đã có AF + HDR phần cứng nên để False.
 CAM_ENHANCE = {"cam1": False, "cam2": True}
 _clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
@@ -117,27 +97,24 @@ def _enhance(img, cam):
     l = _clahe.apply(l)
     img = cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
     blur = cv2.GaussianBlur(img, (0, 0), 3)
-    return cv2.addWeighted(img, 1.35, blur, -0.35, 0)   # unsharp mask nhẹ, tránh tạo nhiễu/viền giả
+    return cv2.addWeighted(img, 1.35, blur, -0.35, 0)   # unsharp mask nhẹ
 
 class CamState:
     def __init__(self):
         self.tracks = []              # track của riêng camera này
-        self.stable_start = {}        # key → lúc bắt đầu đứng
-        self.stable_seen  = {}        # key → lần thấy đứng gần nhất
+        self.stable_start = {}        # key -> lúc bắt đầu đứng im
+        self.stable_seen  = {}        # key -> lần thấy đứng im gần nhất
         self.stable_logged = set()    # key đã ghi đứng im (1 lần/người/camera)
 
 _cam_states: dict = defaultdict(CamState)
 
-# ── ĐÈN THÁP (PLC Mitsubishi Q/iQ-R, MC Protocol qua Ethernet) ──────────────
-# Đổi PLC_IP/PLC_PORT theo module Ethernet thật của PLC (QJ71E71 / cổng built-in
-# iQ-R). Đổi PLC_TYPE thành "iQ-R" nếu dùng dòng iQ-R (mặc định "Q").
-# PLC_COILS: địa chỉ ngõ ra Y thật đấu tới từng màu đèn tháp — chỉnh lại cho khớp
-# tủ điện thực tế trước khi chạy thật.
-PLC_IP      = "192.168.1.10"      # TODO: IP thật của PLC
-PLC_PORT    = 5000                 # TODO: port MC Protocol cấu hình trên module Ethernet PLC
+# Đèn tháp PLC Mitsubishi Q/iQ-R qua MC Protocol. Chỉnh IP/port/địa chỉ Y cho khớp
+# tủ điện thật trước khi chạy thật.
+PLC_IP      = "127.0.0.1"          # tạm trỏ vào plc_simulator.py để test/demo
+PLC_PORT    = 5007                 # khớp --port của plc_simulator.py
 PLC_TYPE    = "Q"                  # "Q" hoặc "iQ-R"
-PLC_COILS   = {"green": "Y0", "yellow": "Y1", "red": "Y2"}   # TODO: đúng địa chỉ Y thật
-PLC_PULSE_S = 1.5                  # thời gian đèn sáng mỗi lần báo (giây)
+PLC_COILS   = {"green": "Y0", "yellow": "Y1", "red": "Y2"}   # TODO: đổi cho đúng địa chỉ Y thật
+PLC_PULSE_S = 2.5                  # thời gian đèn sáng mỗi lần báo (giây)
 
 plc = PLCLight(PLC_IP, PLC_PORT, PLC_COILS, plctype=PLC_TYPE, pulse_sec=PLC_PULSE_S)
 
@@ -148,25 +125,21 @@ def _log_scan(person: str, status: str, cam: str, motion: str = "Đứng im"):
                       "status": status, "motion": motion,
                       "cam": CAMERAS.get(cam, cam)})
     if status == "OK":
-        _log_attendance(person, cam)   # OK ở cam VÀO/RA → check-in/out (xem CAM_ROLE)
-        # báo đèn: cam VÀO (cam1) → xanh ; cam RA/check-out (cam2) → vàng
-        plc.signal("green" if CAM_ROLE.get(cam) == "vào" else "yellow")
-    else:
-        # FAIL (quen bỗng thành lạ) hoặc LẠ (người lạ) → đỏ
-        plc.signal("red")
+        _log_attendance(person, cam)   # OK -> check-in/out theo CAM_ROLE
+    # Báo đèn theo trạng thái nhận diện: OK -> xanh, FAIL -> vàng, LẠ -> đỏ.
+    plc.signal({"OK": "green", "FAIL": "yellow", "LẠ": "red"}.get(status, "red"))
 
-print(f"[main] Khởi tạo YOLO26 + ArcFace...")
+print("[main] Khởi tạo YOLO26 + ArcFace...")
 rec = FaceRecognizer(det_conf=CONF_DETECT)   # YOLO detect mặt, ArcFace nhận diện tên
 
-# ── CHẾ ĐỘ NHẸ: tự bật khi máy KHÔNG có GPU (YOLO chạy CPU) ──
-# CPU thì YOLO/ArcFace chậm. YOLO chỉ TÌM VỊ TRÍ mặt (ArcFace tự cắt+căn lại từ ảnh gốc 1920),
-# nên hạ imgsz YOLO 512→416 giúp NHANH mà KHÔNG giảm độ chính xác nhận dạng.
+# Chế độ nhẹ khi máy không có GPU: hạ imgsz YOLO 512 -> 416 cho nhanh. YOLO chỉ tìm
+# vị trí mặt (ArcFace tự cắt và căn lại từ ảnh gốc) nên không giảm độ chính xác.
 LIGHT_MODE = (rec.device == "cpu")
 if LIGHT_MODE:
     rec.det_imgsz = 416
-TRACK_IMGSZ = 256 if LIGHT_MODE else 320   # YOLO cho /track (bám khung, không ảnh hưởng nhận diện)
+TRACK_IMGSZ = 256 if LIGHT_MODE else 320   # imgsz YOLO cho /track (chỉ bám khung)
 
-print(f"[main] Device YOLO : {rec.device}   {'(CHẾ ĐỘ NHẸ - CPU)' if LIGHT_MODE else ''}")
+print(f"[main] Device YOLO : {rec.device}   {'(chế độ nhẹ - CPU)' if LIGHT_MODE else ''}")
 print(f"[main] DB          : {DB_PATH}  ({len(rec.db_names)} người: {rec.db_names})")
 print(f"[main] Ngưỡng      : detect={CONF_DETECT}  cosine={THRESHOLD}")
 
@@ -175,39 +148,36 @@ rec.recognize(np.zeros((320, 320, 3), dtype=np.uint8), threshold=THRESHOLD)
 print("[main] Warm-up done")
 
 
-# ── BỘ THEO DÕI + LÀM MƯỢT ĐIỂM SỐ (chống nhảy "người lạ") ────────────────
-# Mỗi mặt được ghép với 1 track theo vị trí. Track giữ lịch sử (tên, điểm) vài frame.
-# Quyết định dựa trên ĐIỂM TRUNG BÌNH của danh tính nổi trội trong cửa sổ + HYSTERESIS.
-# LƯU Ý: track state nằm TRONG CamState (mỗi camera 1 bộ riêng — xem _cam_states).
+# Bộ theo dõi và làm mượt điểm số, chống nhấp nháy "người lạ". Mỗi mặt ghép với một
+# track theo vị trí; track giữ lịch sử (tên, điểm) vài frame và quyết định theo điểm
+# trung bình của danh tính nổi trội trong cửa sổ. Track state nằm trong CamState,
+# mỗi camera một bộ riêng (xem _cam_states).
 
-HYSTERESIS  = 0.04    # đã nhận tên → hạ ngưỡng 0.04 để giữ (khó rớt sang "lạ")
-MIN_PRESENCE = 0.5    # danh tính phải xuất hiện >= 50% cửa sổ mới được nhận
-MATCH_FRAC  = 0.18     # ngưỡng ghép track = 18% đường chéo khung (nới để bám khi di chuyển)
-MOVE_SPEED_FRAC = 0.6  # TỐC ĐỘ tâm mặt > 60% bề rộng mặt / GIÂY → DI CHUYỂN (độc lập FPS)
-STABLE_SECONDS = 2.0   # đứng im đủ 2 giây → ghi log 1 lần
-STABLE_GAP  = 4.0      # gián đoạn thấy > 4s → coi là lượt đứng MỚI (phải > nhịp nhận diện
-                       # trên máy chậm, nếu không đồng hồ đứng im bị reset hoài → không ghi)
-STRANGER_MIN = 4       # phải "lạ" liên tục >= 4 frame mới ghi Người lạ (bớt nhầm)
-TRACK_TTL   = 1.5      # track không thấy > 1.5 giây → xoá (dọn theo THỜI GIAN, độc lập FPS)
-REFRESH_SEC = 3.0      # đã nhận ra người quen → DÙNG LẠI danh tính, chỉ chạy ArcFace lại sau 3s
-                       # (cache danh tính → bỏ phần lớn ArcFace trên CPU khi người đã nhận ra)
-REACQUIRE_GAP = 0.6    # ghép LẠI 1 track sau khi mất dấu > 0.6s (nhưng < TRACK_TTL nên chưa bị xoá)
-                       # → COI NHƯ CÓ THỂ LÀ NGƯỜI KHÁC đứng đúng chỗ đó, xoá sạch danh tính cũ,
-                       # buộc nhận diện lại từ đầu. Chống lỗi: người A rời đi, người B đứng gần
-                       # chỗ A vừa đứng → track "thừa kế" nhầm tên A tới tận khi đủ phiếu mới đè lên.
-                       # Người đi liên tục (ghép mỗi ~100ms qua /track, gap luôn < 0.6s) KHÔNG bị
-                       # reset — chỉ trigger khi có GIÁN ĐOẠN thật (rời khung/bị che/đổi người).
+HYSTERESIS  = 0.04    # đã nhận tên thì hạ ngưỡng giữ tên 0.04 (khó rớt sang "lạ")
+MIN_PRESENCE = 0.5    # danh tính phải chiếm >= 50% cửa sổ mới được nhận
+MATCH_FRAC  = 0.18     # ngưỡng ghép track = 18% đường chéo khung
+MOVE_SPEED_FRAC = 0.6  # tốc độ tâm mặt > 60% bề rộng mặt mỗi giây thì coi là di chuyển
+STABLE_SECONDS = 2.0   # đứng im đủ 2 giây thì ghi log 1 lần
+STABLE_GAP  = 4.0      # gián đoạn thấy > 4s thì coi là lượt đứng mới (phải lớn hơn nhịp
+                       # nhận diện trên máy chậm, không thì đồng hồ đứng im bị reset hoài)
+STRANGER_MIN = 4       # phải "lạ" liên tục >= 4 frame mới ghi người lạ
+TRACK_TTL   = 1.5      # track không thấy > 1.5 giây thì xoá
+REFRESH_SEC = 3.0      # đã nhận ra người quen thì dùng lại tên, chỉ chạy ArcFace lại sau 3s
+REACQUIRE_GAP = 0.6    # ghép lại một track sau khi mất dấu > 0.6s (nhưng < TRACK_TTL nên
+                       # chưa bị xoá): coi như có thể là người khác đứng đúng chỗ đó, xoá
+                       # danh tính cũ và nhận diện lại từ đầu. Người đi liên tục ghép mỗi
+                       # ~100ms qua /track nên gap luôn < 0.6s, không bị reset.
 
 def _reacquire_if_stale(t, now):
-    """Gọi TRƯỚC khi cập nhật seen cho 1 track vừa được ghép lại — xem REACQUIRE_GAP."""
+    """Gọi trước khi cập nhật seen cho một track vừa được ghép lại (xem REACQUIRE_GAP)."""
     if (now - t["seen"]).total_seconds() > REACQUIRE_GAP:
         t["hist"].clear(); t["label"] = "LẠ"; t["logged_label"] = ""
         t["ever_known"] = False; t["arc_time"] = None; t["arc_score"] = 0.5
 
 def _is_moving(pos, wsize):
-    """pos: deque (cx, cy, dt). TỐC ĐỘ theo GIÂY (độc lập FPS) + BỀN với nhiễu:
-    so vị trí TRUNG BÌNH nửa đầu vs nửa sau cửa sổ (1 điểm nhiễu bị trung bình hoá,
-    không làm đứng im thành di chuyển)."""
+    """pos: deque (cx, cy, dt). Đo tốc độ theo giây (độc lập FPS) bằng cách so vị trí
+    trung bình nửa đầu và nửa sau cửa sổ, để một điểm nhiễu không làm đứng im thành
+    di chuyển."""
     if len(pos) < 3 or wsize <= 0:
         return False
     h = len(pos) // 2
@@ -221,17 +191,17 @@ def _is_moving(pos, wsize):
     return (disp / dt) > MOVE_SPEED_FRAC * wsize
 
 def _match_thr():
-    # ngưỡng ghép trong hệ toạ độ CHUẨN HOÁ [0,1] (đường chéo = √2)
+    # ngưỡng ghép trong hệ toạ độ chuẩn hoá [0,1] (đường chéo = căn 2)
     return MATCH_FRAC * (2 ** 0.5)
 
 def _new_track(cx, cy, now):
     return {"cx": cx, "cy": cy, "hist": deque(maxlen=SMOOTH_WINDOW),
             "seen": now, "label": "LẠ", "logged_label": "",
             "pos": deque(maxlen=SMOOTH_WINDOW), "moving": False, "ever_known": False,
-            "arc_time": None, "arc_score": 0.5}   # lần ArcFace gần nhất + điểm (cache)
+            "arc_time": None, "arc_score": 0.5}   # cache: lần chạy ArcFace gần nhất và điểm
 
 def _nearest_track(tracks, cxn, cyn, thr):
-    """Track gần nhất (CHỈ ĐỌC, không chiếm) — để quyết định có cần chạy ArcFace không."""
+    """Track gần nhất (chỉ đọc, không chiếm), để quyết định có cần chạy ArcFace không."""
     best, bd = None, thr
     for t in tracks:
         d = ((t["cx"] - cxn) ** 2 + (t["cy"] - cyn) ** 2) ** 0.5
@@ -240,7 +210,7 @@ def _nearest_track(tracks, cxn, cyn, thr):
     return best
 
 def _match_track_idx(tracks, cx, cy, thr, used):
-    """Ghép (cx,cy) với track GẦN NHẤT chưa dùng trong `tracks`. Trả index hoặc None."""
+    """Ghép (cx,cy) với track gần nhất chưa dùng trong `tracks`. Trả index hoặc None."""
     bt, bd = None, thr
     for ti, t in enumerate(tracks):
         if ti in used:
@@ -251,20 +221,20 @@ def _match_track_idx(tracks, cx, cy, thr, used):
     return bt
 
 def _prune_tracks(st, now):
-    """Dọn track cũ của MỘT camera theo THỜI GIAN (độc lập FPS)."""
+    """Dọn track cũ của một camera theo thời gian (độc lập FPS)."""
     st.tracks = [t for t in st.tracks if (now - t["seen"]).total_seconds() <= TRACK_TTL]
 
 def smooth_labels(faces, W, H, threshold, st, cam):
-    """faces → list (label, disp_score) đã làm mượt, dùng track state `st` của camera `cam`.
-    Ghi nhật ký kèm tên camera."""
+    """faces -> list (label, disp_score) đã làm mượt, dùng track state `st` của camera
+    `cam`. Ghi nhật ký kèm tên camera."""
     thr = _match_thr()
     now = datetime.now()
-    _prune_tracks(st, now)   # dọn track cũ TRƯỚC khi ghép → không hồi sinh track tồn đọng
+    _prune_tracks(st, now)   # dọn track cũ trước khi ghép
     tracks = st.tracks
     used, out = set(), []
     for f in faces:
         x1, y1, x2, y2 = f["box"]
-        # TOẠ ĐỘ CHUẨN HOÁ [0,1] → độc lập độ phân giải ảnh (chung hệ với /track)
+        # toạ độ chuẩn hoá [0,1], chung hệ với /track
         cxn, cyn = (x1 + x2) / 2 / W, (y1 + y2) / 2 / H
         wsn = (x2 - x1) / W
         bn, bs = f.get("best_name"), float(f.get("score", 0.0))
@@ -275,17 +245,17 @@ def smooth_labels(faces, W, H, threshold, st, cam):
             tracks.append(t); used.add(len(tracks) - 1)
         else:
             t = tracks[bt]
-            _reacquire_if_stale(t, now)   # gián đoạn dài → có thể người KHÁC, xoá danh tính cũ
+            _reacquire_if_stale(t, now)   # gián đoạn dài: có thể người khác, xoá danh tính cũ
             t["cx"], t["cy"], t["seen"] = cxn, cyn, now
             used.add(bt)
-        if bn != SKIP_VOTE:   # khung mờ → không tính phiếu, giữ nguyên hist cũ (xem BLUR_THR)
+        if bn != SKIP_VOTE:   # khung mờ thì không tính phiếu, giữ nguyên hist (xem BLUR_THR)
             t["hist"].append((bn, bs))
 
-        # ── ĐO CHUYỂN ĐỘNG (theo TỐC ĐỘ, độc lập FPS): đứng im hay di chuyển ──
+        # đứng im hay di chuyển
         t["pos"].append((cxn, cyn, now))
         t["moving"] = _is_moving(t["pos"], wsn)
 
-        # gộp điểm theo từng tên trong cửa sổ → chọn danh tính nổi trội
+        # gộp điểm theo từng tên trong cửa sổ rồi chọn danh tính nổi trội
         by = defaultdict(list)
         for n, s in t["hist"]:
             if n is not None:
@@ -294,7 +264,7 @@ def smooth_labels(faces, W, H, threshold, st, cam):
             dom = max(by, key=lambda n: (len(by[n]), sum(by[n]) / len(by[n])))
             mean_s   = sum(by[dom]) / len(by[dom])
             presence = len(by[dom]) / len(t["hist"])
-            # hysteresis: nếu track đang mang chính tên này → ngưỡng giữ thấp hơn
+            # track đang mang chính tên này thì ngưỡng giữ thấp hơn
             keep_thr = threshold - HYSTERESIS if t["label"] == dom else threshold
             if presence >= MIN_PRESENCE and mean_s >= keep_thr:
                 t["label"] = dom
@@ -306,9 +276,9 @@ def smooth_labels(faces, W, H, threshold, st, cam):
             disp = bs
         out.append((t["label"], round(disp, 3)))
 
-        # ── GHI NHẬT KÝ QUÉT ──
-        #  ĐỨNG IM  : một danh tính đứng đủ STABLE_SECONDS → ghi 1 lần; lặp lại thì BỎ QUA.
-        #  DI CHUYỂN: ghi OK/FAIL mỗi lần chuyển trạng thái (son→lạ→son…).
+        # Ghi nhật ký quét:
+        #   đứng im  : một danh tính đứng đủ STABLE_SECONDS thì ghi 1 lần, lặp lại thì bỏ qua.
+        #   di chuyển: ghi OK/FAIL mỗi lần đổi trạng thái.
         old = t.get("logged_label", "")
         lbl = t["label"]
         if lbl != "LẠ":
@@ -316,17 +286,16 @@ def smooth_labels(faces, W, H, threshold, st, cam):
         key = lbl if lbl != "LẠ" else "Người lạ"
 
         if t["moving"]:
-            # ── DI CHUYỂN: ghi MỖI frame nhận diện (đi qua thì ghi nhiều), fail khi hỏng ──
             if lbl != "LẠ" and len(t["hist"]) >= 1:
                 _log_scan(lbl, "OK", cam, "Di chuyển"); t["logged_label"] = lbl
             elif lbl == "LẠ" and old not in ("", "LẠ"):
                 _log_scan(old, "FAIL", cam, "Di chuyển"); t["logged_label"] = lbl
             elif lbl == "LẠ" and old != "LẠ" and not t["ever_known"] and len(t["hist"]) >= STRANGER_MIN:
                 _log_scan("Người lạ", "LẠ", cam, "Di chuyển"); t["logged_label"] = lbl
-            # đang di chuyển → reset đồng hồ đứng im (GIỮ cờ đã-ghi: đứng im chỉ ghi 1 lần)
+            # đang di chuyển thì reset đồng hồ đứng im (giữ cờ đã-ghi)
             st.stable_start.pop(key, None); st.stable_seen.pop(key, None)
         else:
-            # ── ĐỨNG IM: mỗi người CHỈ ghi 1 lần DUY NHẤT trên camera này ──
+            # đứng im: mỗi người chỉ ghi 1 lần trên camera này
             ok_stable = (lbl != "LẠ" and len(t["hist"]) >= 1)
             la_stable = (lbl == "LẠ" and not t["ever_known"] and len(t["hist"]) >= STRANGER_MIN)
             if (ok_stable or la_stable) and key not in st.stable_logged:
@@ -336,7 +305,7 @@ def smooth_labels(faces, W, H, threshold, st, cam):
                 st.stable_seen[key] = now
                 if (now - st.stable_start[key]).total_seconds() >= STABLE_SECONDS:
                     _log_scan(key, "LẠ" if key == "Người lạ" else "OK", cam, "Đứng im")
-                    st.stable_logged.add(key)           # đã ghi → không ghi đứng im lại (cam này)
+                    st.stable_logged.add(key)
                     t["logged_label"] = lbl
 
     return out
@@ -362,9 +331,16 @@ def health():
     }
 
 
+@app.get("/plc-status")
+def plc_status():
+    """Trạng thái đèn tháp hiện tại, đọc thẳng từ PLCLight. Web UI poll endpoint này
+    để hiển thị đúng màu đang sáng, kể cả khi PLC thật chưa đấu nối."""
+    return {"color": plc.current, "connected": plc.connected}
+
+
 @app.get("/plc-test")
 def plc_test(color: str = Query("green")):
-    """Bấm thử đèn tháp từ trình duyệt (debug đấu dây/địa chỉ Y trước khi chạy thật):
+    """Bấm thử đèn tháp từ trình duyệt để kiểm tra đấu dây/địa chỉ Y:
     GET /plc-test?color=green | yellow | red"""
     if color not in PLC_COILS:
         return JSONResponse({"ok": False, "msg": f"Màu '{color}' không hợp lệ (green/yellow/red)"},
@@ -377,24 +353,24 @@ def plc_test(color: str = Query("green")):
 async def process_frame(
     file: UploadFile = File(...),
     conf_detect: float = Form(CONF_DETECT),   # ngưỡng YOLO bắt mặt (web gửi lên)
-    conf_known: float = Form(THRESHOLD),      # ngưỡng COSINE người quen/lạ (web gửi lên)
+    conf_known: float = Form(THRESHOLD),      # ngưỡng cosine người quen/lạ (web gửi lên)
     cam: str = Form("cam1"),                  # camera nào gửi frame (state tracking riêng)
 ):
     """
-    Nhận frame webcam/video → YOLO khoanh mặt → ArcFace embedding → cosine với DB.
-    Trả ảnh đã annotate (base64 JPEG). Ngưỡng chỉnh trực tiếp từ web.
+    Nhận frame webcam/video -> YOLO khoanh mặt -> ArcFace embedding -> cosine với DB.
+    Trả về toạ độ khung và danh sách nhận diện. Ngưỡng chỉnh trực tiếp từ web.
     """
     contents = await file.read()
     nparr = np.frombuffer(contents, np.uint8)
     img   = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
         return JSONResponse({"status": "error", "message": "Invalid image"}, status_code=400)
-    img = _enhance(img, cam)   # bù mềm/thiếu sáng cho cam thiếu AF/HDR (xem CAM_ENHANCE)
+    img = _enhance(img, cam)   # bù sáng/độ nét cho cam thiếu AF/HDR (xem CAM_ENHANCE)
 
-    # kẹp giá trị hợp lệ để tránh web gửi số vô lý
+    # kẹp giá trị hợp lệ phòng web gửi số vô lý
     conf_detect = min(max(conf_detect, 0.05), 0.9)
-    threshold   = min(max(conf_known, 0.05), 0.95)   # conf_known giờ là ngưỡng cosine
-    # siết riêng theo camera: cam2 (Rapoo) ảnh mềm → ngưỡng cao hơn + đòi khoảng cách top1/top2
+    threshold   = min(max(conf_known, 0.05), 0.95)
+    # siết riêng theo camera (xem CAM_TUNE)
     tune     = CAM_TUNE.get(cam, CAM_TUNE["cam1"])
     threshold = min(threshold + tune["thr_bump"], 0.95)
     margin    = tune["margin"]
@@ -405,9 +381,10 @@ async def process_frame(
     loop = asyncio.get_event_loop()
     H, W = img.shape[:2]
 
-    # ── NHẬN DIỆN CÓ CACHE (tiết kiệm CPU) ─────────────────────────────────
-    # 1) YOLO tìm mọi mặt (nhanh). 2) Mặt nào đã nhận ra chắc & còn hạn → DÙNG LẠI tên,
-    #    KHÔNG chạy ArcFace. 3) ArcFace chỉ chạy cho mặt MỚI / chưa chắc / quá hạn refresh.
+    # Nhận diện có cache để tiết kiệm CPU:
+    #   1) YOLO tìm mọi mặt.
+    #   2) Mặt đã nhận ra chắc và còn hạn thì dùng lại tên, không chạy ArcFace.
+    #   3) ArcFace chỉ chạy cho mặt mới / chưa chắc / quá hạn refresh.
     boxes = await loop.run_in_executor(executor, lambda: rec.detect(img))
     now_dt = datetime.now()
     thr_m = _match_thr()
@@ -422,9 +399,9 @@ async def process_frame(
         if (tr is not None and tr["label"] != "LẠ" and tr["arc_time"] is not None
                 and (now_dt - tr["arc_time"]).total_seconds() < REFRESH_SEC):
             faces[i] = {"box": (x1, y1, x2, y2), "best_name": tr["label"],
-                        "score": tr["arc_score"], "runner": None}   # DÙNG LẠI (bỏ ArcFace)
+                        "score": tr["arc_score"], "runner": None}   # dùng lại tên, bỏ ArcFace
         elif rec.is_blurry(img, (x1, y1, x2, y2), blur_thr):
-            # khung mờ (motion-blur) → bỏ ArcFace hẳn, không tính phiếu (xem BLUR_THR/SKIP_VOTE)
+            # khung mờ: bỏ ArcFace, không tính phiếu (xem BLUR_THR/SKIP_VOTE)
             faces[i] = {"box": (x1, y1, x2, y2), "best_name": SKIP_VOTE, "score": 0.0, "runner": None}
         else:
             need.append(i)
@@ -439,11 +416,9 @@ async def process_frame(
                 run_score = ranked[1][1] if len(ranked) > 1 else 0.0
                 runner = ({"name": ranked[1][0], "score": round(ranked[1][1], 3)}
                           if len(ranked) > 1 else None)
-                # margin gate: top-1 sát top-2 → NHẬP NHẰNG 2 người quen, bỏ tên (best_name=None)
-                # để frame này thành phiếu "chưa chắc"; bộ làm mượt cần đa số frame chắc mới gán.
-                # Mặt ĐANG DI CHUYỂN vốn mờ hơn (motion blur) → top1/top2 tự nhiên sát nhau hơn
-                # người đứng im; đòi margin y hệt sẽ loại oan hầu hết phiếu của người đi qua → giảm
-                # nửa margin khi track đang moving (đã có sẵn t["moving"] cập nhật từ /track).
+                # top-1 sát top-2 nghĩa là đang lẫn giữa 2 người quen: bỏ tên (best_name=None)
+                # để frame này thành phiếu chưa chắc. Mặt đang di chuyển vốn mờ hơn nên
+                # top1/top2 sát nhau hơn, giảm nửa margin khi track đang moving.
                 m_tr = trk_of[need[k]]
                 m = margin * 0.5 if (m_tr is not None and m_tr.get("moving")) else margin
                 name = None if (top_score - run_score) < m else top_name
@@ -464,8 +439,8 @@ async def process_frame(
     infer_ms = (time.perf_counter() - t0) * 1000
 
     n0 = len(_scan_log)
-    voted = smooth_labels(faces, W, H, threshold, st, cam)   # làm mượt + ghi log theo camera
-    # sự kiện quét MỚI sinh ra ở frame này → gửi về client hiện live (kèm tên camera)
+    voted = smooth_labels(faces, W, H, threshold, st, cam)   # làm mượt và ghi log theo camera
+    # sự kiện quét mới sinh ra ở frame này, gửi về client để hiện live
     scan_events = [{"time": e["dt"].strftime("%H:%M:%S"), "person": e["person"],
                     "status": e["status"], "motion": e["motion"], "cam": e["cam"]}
                    for e in _scan_log[n0:]]
@@ -474,8 +449,7 @@ async def process_frame(
     known = []
     detections = []
 
-    # Chỉ TRẢ TOẠ ĐỘ KHUNG (client tự vẽ overlay lên video) — không encode ảnh
-    # → nhẹ băng thông, detect nhanh hơn (bỏ imencode + base64).
+    # Chỉ trả toạ độ khung, client tự vẽ overlay lên video (nhẹ băng thông, nhanh hơn).
     for f, (vname, vscore) in zip(faces, voted):
         x1, y1, x2, y2 = f["box"]
         runner = f.get("runner")
@@ -490,10 +464,10 @@ async def process_frame(
                                "runner": runner, "box": box})
 
     known_unique = list(dict.fromkeys(known))   # bỏ trùng, giữ thứ tự
-    # sắp xếp: người lạ lên đầu, rồi theo cosine giảm dần
+    # người lạ lên đầu, rồi theo cosine giảm dần
     detections.sort(key=lambda d: (not d["stranger"], -d["conf"]))
     return {
-        "img_w": W, "img_h": H,   # kích thước frame (client scale toạ độ khung)
+        "img_w": W, "img_h": H,   # kích thước frame để client scale toạ độ khung
         "stranger": stranger,
         "known": known_unique,
         "detections": detections,
@@ -509,9 +483,9 @@ async def track_faces(
     conf_detect: float = Form(CONF_DETECT),
     cam: str = Form("cam1"),                  # camera nào (state tracking riêng)
 ):
-    """CHỈ chạy YOLO (nhanh ~50ms) → trả TOẠ ĐỘ KHUNG bám sát thời gian thực.
-    Tên/điểm lấy từ track gần nhất (do /process-frame cập nhật) → không phải chờ ArcFace.
-    Client gọi endpoint này liên tục cho khung mượt + biến mất nhanh khi rời khung hình."""
+    """Chỉ chạy YOLO (~50ms) rồi trả toạ độ khung bám sát thời gian thực. Tên/điểm lấy
+    từ track gần nhất (do /process-frame cập nhật) nên không phải chờ ArcFace. Client
+    gọi liên tục cho khung mượt và biến mất nhanh khi rời khung hình."""
     contents = await file.read()
     img = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
     if img is None:
@@ -520,32 +494,31 @@ async def track_faces(
     rec.det_conf = min(max(conf_detect, 0.05), 0.9)
     loop = asyncio.get_event_loop()
     H, W = img.shape[:2]
-    # /track chạy nhanh ~10fps chỉ để bám khung (tên lấy từ cache, không chạy ArcFace) → KHÔNG
-    # áp _enhance ở đây, đỡ tốn CPU thêm ở vòng lặp tần suất cao; nhận dạng thật (nơi _enhance
-    # có tác dụng) nằm ở /process-frame. YOLO imgsz nhỏ → nhanh hơn nhiều trên CPU.
+    # /track chạy ~10fps chỉ để bám khung nên không áp _enhance (đỡ tốn CPU ở vòng lặp
+    # tần suất cao). Nhận diện thật nằm ở /process-frame. imgsz nhỏ cho nhanh trên CPU.
     boxes = await loop.run_in_executor(executor, lambda: rec.detect(img, imgsz=TRACK_IMGSZ))
 
     st = _cam_states[cam]                 # state tracking riêng của camera này
     match_thr = _match_thr()
     now = datetime.now()
-    _prune_tracks(st, now)   # dọn track cũ TRƯỚC khi ghép
+    _prune_tracks(st, now)   # dọn track cũ trước khi ghép
     tracks = st.tracks
     used, dets = set(), []
     for (x1, y1, x2, y2, conf) in boxes:
-        # TOẠ ĐỘ CHUẨN HOÁ [0,1] → CHUNG hệ với /process-frame 
+        # toạ độ chuẩn hoá [0,1], chung hệ với /process-frame
         cxn, cyn = (x1 + x2) / 2 / W, (y1 + y2) / 2 / H
         wsn = (x2 - x1) / W
         bi = _match_track_idx(tracks, cxn, cyn, match_thr, used)
         if bi is None:
-            # /track TẠO track mới → chờ /process-frame gán tên.
+            # tạo track mới, chờ /process-frame gán tên
             t = _new_track(cxn, cyn, now)
             tracks.append(t); bi = len(tracks) - 1
         else:
             t = tracks[bi]
-            _reacquire_if_stale(t, now)   # gián đoạn dài → có thể người KHÁC, xoá danh tính cũ
+            _reacquire_if_stale(t, now)   # gián đoạn dài: có thể người khác, xoá danh tính cũ
             t["cx"], t["cy"], t["seen"] = cxn, cyn, now
         used.add(bi)
-        # GÓP dữ liệu chuyển động ở nhịp nhanh của /track → đo đứng/đi chính xác
+        # góp dữ liệu chuyển động ở nhịp nhanh của /track để đo đứng/đi chính xác hơn
         t["pos"].append((cxn, cyn, now))
         t["moving"] = _is_moving(t["pos"], wsn)
 
@@ -576,13 +549,13 @@ async def capture(file: UploadFile = File(...), person: str = Form(...), role: s
     if img is None:
         return JSONResponse({"ok": False, "msg": "Ảnh lỗi"}, status_code=400)
 
-    vec = rec.embed_largest(img)   # YOLO khoanh mặt to nhất → ArcFace embedding
+    vec = rec.embed_largest(img)   # YOLO khoanh mặt to nhất rồi ArcFace embedding
     if vec is None:
-        return JSONResponse({"ok": False, "msg": "Không thấy/căn được khuôn mặt — đưa mặt gần & thẳng hơn"},
+        return JSONResponse({"ok": False, "msg": "Không thấy/căn được khuôn mặt — đưa mặt gần và thẳng hơn"},
                             status_code=200)
 
     is_new = person not in rec.db_names
-    rec.add_embedding(person, vec, role=role)   # thêm vào DB in-memory (tạo người mới nếu chưa có)
+    rec.add_embedding(person, vec, role=role)   # tạo người mới nếu chưa có
     rec.save_db()                    # ghi ra face_db.pt
 
     count = int((rec.db_owner == rec.db_names.index(person)).sum())
@@ -619,13 +592,13 @@ async def remove_person(person: str = Form(...)):
 
 @app.get("/people/samples")
 def people_samples(person: str):
-    """Chẩn đoán từng mẫu của 1 người — tìm mẫu enroll NHẦM mà không cần xem lại ảnh."""
+    """Chẩn đoán từng mẫu của một người để tìm mẫu enroll nhầm."""
     return {"person": person, "samples": rec.sample_diagnostics((person or "").strip())}
 
 
 @app.post("/remove-sample")
 async def remove_sample(person: str = Form(...), index: int = Form(...)):
-    """Xoá 1 MẪU cụ thể của 'person' theo index lấy từ /people/samples. Ghi lại face_db.pt."""
+    """Xoá một mẫu cụ thể của 'person' theo index lấy từ /people/samples. Ghi lại face_db.pt."""
     person = (person or "").strip()
     ok = rec.remove_embedding(person, index)
     if ok:
@@ -642,9 +615,9 @@ def _room_snapshot():
 
 
 def _log_attendance(person: str, cam: str):
-    """Check-in/out THEO CAMERA (xem CAM_ROLE) — gọi từ _log_scan() ngay khi 1 track được
-    xác nhận OK, không cần client tự gộp/poll trạng thái 2 cam. Idempotent: OK lặp lại khi
-    di chuyển (mỗi frame) không tạo thêm sự kiện vì đã kiểm tra _in_room trước khi ghi."""
+    """Check-in/out theo camera (xem CAM_ROLE), gọi từ _log_scan() khi một track được
+    xác nhận OK. OK lặp lại khi di chuyển không tạo thêm sự kiện vì đã kiểm tra _in_room
+    trước khi ghi."""
     role = CAM_ROLE.get(cam)
     now = datetime.now()
     if role == "vào" and person not in _in_room:
@@ -671,7 +644,8 @@ def _log_attendance(person: str, cam: str):
 
 
 def _sessions_from_events(events: list[dict]) -> list[dict]:
-    """Ghep cap vao/ra thanh session. Tra ve list {person, role, date, entry_dt, duration_min, ks_present, sv_present}."""
+    """Ghép cặp vào/ra thành session. Trả về list {person, role, date, entry_dt,
+    duration_min, ks_present, sv_present}."""
     pending  = {}
     sessions = []
     for ev in sorted(events, key=lambda e: e["dt"]):
@@ -696,15 +670,14 @@ def _sessions_from_events(events: list[dict]) -> list[dict]:
 def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
                 mode: str = "full") -> bytes:
     """
-    3 sheet: Ngay / Tuan / Thang. 
+    Xuất 3 sheet: Ngày / Tuần / Tháng.
     - mode="full": nhật ký đầy đủ (đứng im + di chuyển + fail/lạ).
-    - mode="once": CHỈ nhận dạng mỗi người 1 lần (bỏ di chuyển, bỏ lặp, bỏ fail/lạ).
-    Tuan/Thang
+    - mode="once": chỉ nhận dạng mỗi người 1 lần (bỏ di chuyển, bỏ lặp, bỏ fail/lạ).
     """
     from openpyxl.utils import get_column_letter
 
     if mode == "once":
-        # chỉ giữ lần OK ĐẦU TIÊN của mỗi người
+        # chỉ giữ lần OK đầu tiên của mỗi người
         seen, filtered = set(), []
         for e in sorted(scans, key=lambda x: x["dt"]):
             if e["status"] == "OK" and e["person"] not in seen:
@@ -719,7 +692,7 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
 
     VIET_DAYS = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"]
 
-    # ── STYLES ──────────────────────────────────────────────────────────────
+    # Định dạng ô
     TITLE_KS   = PatternFill("solid", fgColor="1E3A5F")
     TITLE_SV   = PatternFill("solid", fgColor="4A235A")
     HDR_KS     = PatternFill("solid", fgColor="2874A6")
@@ -745,13 +718,13 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
     THIN   = Side(style="thin", color="BDBDBD")
     BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
-    # ── PEOPLE ──────────────────────────────────────────────────────────────
+    # Danh sách người theo vai trò
     ks_names  = sorted([p["name"] for p in people if p.get("role") == "kỹ sư"])
     sv_names  = sorted([p["name"] for p in people if p.get("role") == "sinh viên"])
     total_ks  = len(ks_names)
     total_sv  = len(sv_names)
 
-    # ── SESSIONS & AGGREGATION ──────────────────────────────────────────────
+    # Ghép session và tổng hợp
     all_sessions = _sessions_from_events(events)
 
     def _agg_daily(sessions):
@@ -847,8 +820,8 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
     c.font = SUM_FONT; c.fill = SUM_SV; c.alignment = CENTER
     ws1.row_dimensions[sum_row].height = 22
 
-    # ── BẢNG NGƯỜI LẠ / FAIL (bên dưới, span toàn bộ) ──
-    ftitle = sum_row + 2      # STT | Ngày | Giờ | Họ và Tên | Kết quả (cột Kết quả = cột GAP)
+    # Bảng người lạ / fail (bên dưới, trải hết chiều ngang)
+    ftitle = sum_row + 2
     ws1.merge_cells(start_row=ftitle, start_column=1, end_row=ftitle, end_column=SV1+NC-1)
     c = ws1.cell(row=ftitle, column=1, value="BẢNG NGƯỜI LẠ / NHẬN DIỆN FAIL")
     c.font = TITLE_FONT; c.fill = RED_DARK; c.alignment = CENTER
@@ -904,7 +877,7 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
     ws2.row_dimensions[2].height = 22
     ws2.freeze_panes = "B3"
 
-    # Compute weeks
+    # Gom số liệu theo tuần
     week_to_dates_ks = defaultdict(set)
     week_to_dates_sv = defaultdict(set)
     for s in all_sessions:
@@ -994,7 +967,7 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
     ws3.row_dimensions[2].height = 22
     ws3.freeze_panes = "B3"
 
-    # Compute months
+    # Gom số liệu theo tháng
     month_to_dates_ks = defaultdict(set)
     month_to_dates_sv = defaultdict(set)
     for s in all_sessions:
@@ -1067,7 +1040,7 @@ def _make_excel(events: list[dict], scans: list[dict], people: list[dict],
 
 @app.get("/export")
 def export_attendance(mode: str = "full"):
-    """Xuat nhat ky ra Excel. mode: 'full' (đầy đủ có di chuyển) | 'once' (mỗi người 1 lần)."""
+    """Xuất nhật ký ra Excel. mode: 'full' (đầy đủ có di chuyển) | 'once' (mỗi người 1 lần)."""
     mode = "once" if mode == "once" else "full"
     data = _make_excel(_attendance_log, _scan_log, rec.people_summary(), mode=mode)
     tag = "1lan" if mode == "once" else "daydu"
@@ -1125,9 +1098,9 @@ def results_page(run: str = ""):
         f"<option value='{n}'{' selected' if n == run else ''}>{n}</option>" for n in runs
     )
     titles = {
-        "confusion_matrix_normalized.png": "Confusion Matrix (chuẩn hoá) — nhìn ô quan↔tri",
-        "results.png": "Đường cong loss & mAP theo epoch",
-        "BoxPR_curve.png": "Precision–Recall",
+        "confusion_matrix_normalized.png": "Confusion matrix (chuẩn hoá)",
+        "results.png": "Đường cong loss và mAP theo epoch",
+        "BoxPR_curve.png": "Precision - Recall",
         "BoxF1_curve.png": "F1 theo confidence",
         "val_batch0_pred.jpg": "Ảnh dự đoán (val)",
         "val_batch0_labels.jpg": "Ảnh nhãn gốc (val)",
