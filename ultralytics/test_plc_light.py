@@ -1,22 +1,21 @@
 """
-Test độc lập đèn tháp qua PLC — chạy TRƯỚC khi tích hợp vào main.py, để xác nhận
-đúng địa chỉ Y và đấu dây thật, không lẫn với luồng nhận diện khuôn mặt.
+Test riêng đèn tháp qua PLC, chạy trước khi tích hợp vào main.py để xác nhận đúng
+địa chỉ Y và đấu dây.
 
 Cách dùng:
     python test_plc_light.py                 # bật lần lượt xanh -> vàng -> đỏ, mỗi màu 2s
     python test_plc_light.py green            # chỉ bật xanh 2s rồi tắt
     python test_plc_light.py red --duration 5 # bật đỏ 5s
 
-Trong lúc chạy, mở GX Works ở chế độ Online Monitor để xem đúng bit Y có đổi
-trạng thái không (xem mục 9 trong giao-tiep-plc-mitsubishi.md nếu đèn không sáng
-dù Y đã đổi trên GX Works — khi đó là lỗi phần cứng, không phải phần mềm).
+Trong lúc chạy, mở GX Works ở chế độ Online Monitor để xem bit Y có đổi trạng thái
+không. Nếu Y đổi mà đèn không sáng thì lỗi nằm ở phần cứng/đấu dây.
 """
 import argparse
 import time
 
 from plc_light import PLCLight
 
-# Đổi 4 giá trị này khớp với main.py / tủ điện thật trước khi chạy.
+# Đổi 4 giá trị này cho khớp main.py / tủ điện thật trước khi chạy.
 PLC_IP    = "192.168.1.10"
 PLC_PORT  = 5000
 PLC_TYPE  = "Q"
@@ -37,9 +36,9 @@ def main():
     for c in colors:
         print(f"--> Bật {c} ({PLC_COILS[c]}) trong {args.duration}s ...")
         plc.signal(c, duration=args.duration)
-        time.sleep(args.duration + 0.5)   # đợi lệnh xử lý xong trước khi sang màu kế
+        time.sleep(args.duration + 0.5)   # đợi xử lý xong trước khi sang màu kế
 
-    print(f"Kết nối PLC: {'OK' if plc.connected else 'THẤT BẠI — kiểm tra IP/port/mạng LAN'}")
+    print(f"Kết nối PLC: {'OK' if plc.connected else 'thất bại - kiểm tra IP/port/mạng LAN'}")
     plc.close()
 
 

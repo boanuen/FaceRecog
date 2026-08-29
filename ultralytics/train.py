@@ -1,36 +1,34 @@
 """
-Fix tri/quan confusion in YOLO26 face recognition
-
+Train YOLO26 detect 5 lớp khuôn mặt. Tinh chỉnh loss gain và augmentation để giảm
+nhầm giữa quan và tri (2 người có nét mặt gần giống nhau).
 """
 from ultralytics import YOLO
 import torch, sys
 
-MODEL_SIZE = "m"   # m: to hơn s, phân biệt 2 mặt giống nhau tốt hơn (bản v4 bạn từng chạy ổn)
-IMGSZ = 512        # ảnh gốc ~480; 512 là đủ, tăng cao hơn chỉ phóng to chứ không thêm chi tiết
+MODEL_SIZE = "m"   # "m" phân biệt 2 mặt giống nhau tốt hơn "s"
+IMGSZ = 512        # ảnh gốc ~480px, 512 là đủ
 
-# CONFIGS là NGUỒN DUY NHẤT — mọi tham số bên dưới đều được truyền vào train().
-# Hyperparams giống nhau cho m/s (không phụ thuộc kích cỡ model); chỉ khác model & batch.
+# Mọi tham số train lấy từ đây. Hyperparams giống nhau cho m/s, chỉ khác model và batch.
 _COMMON = dict(
-    # --- optimizer ---
+    # optimizer
     optimizer="MuSGD",
-    lr0=0.002, lrf=0.01,              # lrf=0.01 để cosine decay về gần 0 (cũ 0.882 gần như KHÔNG decay)
+    lr0=0.002, lrf=0.01,              # lrf=0.01 cho cosine decay về gần 0
     momentum=0.949, weight_decay=0.0005, warmup_epochs=3.0,
 
-    # --- loss gains: đòn bẩy chính chống nhầm danh tính ---
-    box=7.5,                          # ↓ từ 9.83 để nhánh cls có trọng số tương đối cao hơn
-    cls=1.5,                          # ↑ từ mặc định 0.5 — TĂNG MẠNH lực phân biệt quan/tri
+    # loss gains
+    box=7.5,                          # giảm từ 9.83 để nhánh cls có trọng số tương đối cao hơn
+    cls=1.5,                          # tăng từ mặc định 0.5 để phân biệt quan/tri
     dfl=1.5,
     cls_pw=0.0,                       # tắt inverse-freq weighting (đang vô tình hạ trọng số 'tri')
 
-    # --- augmentation ---
-    # ⭐ HSV MẠNH: đây là đòn bẩy DUY NHẤT về tham số giúp model bớt phụ thuộc màu/ánh sáng
-    #    của ảnh điện thoại -> chịu được webcam (ánh sáng/màu khác). Các run cũ để hsv quá thấp.
+    # augmentation
+    # HSV mạnh để model bớt phụ thuộc màu/ánh sáng của ảnh điện thoại khi chạy trên webcam.
     hsv_h=0.02, hsv_s=0.7, hsv_v=0.5, bgr=0.0,
     mosaic=0.5, close_mosaic=15,
-    mixup=0.1, cutmix=0.0, copy_paste=0.0,   # mixup nhẹ: tăng khả năng khái quát hoá
+    mixup=0.1, cutmix=0.0, copy_paste=0.0,   # mixup nhẹ để khái quát hoá tốt hơn
     scale=0.5, translate=0.1, degrees=8.0, shear=0.0,
-    fliplr=0.5, flipud=0.0,           # mặt ~đối xứng: lật ngang nhân đôi dữ liệu góc nghiêng 2 phía
-    erasing=0.4,                      # random erasing: robust với che khuất/góc nghiêng
+    fliplr=0.5, flipud=0.0,           # mặt gần đối xứng nên lật ngang được, không lật dọc
+    erasing=0.4,                      # random erasing: bền hơn với che khuất/góc nghiêng
 )
 
 CONFIGS = {

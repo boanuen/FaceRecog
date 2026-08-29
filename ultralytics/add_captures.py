@@ -1,8 +1,8 @@
-"""Gộp ảnh webcam đã chụp (captures/) vào tập train -> tạo data_plus.yaml để train lại.
-Zero-copy: chỉ sinh 1 file .txt liệt kê (ảnh train gốc + ảnh webcam mới) + 1 .yaml.
-Nhãn tự tìm theo quy ước YOLO (images/ -> labels/), cả 2 nguồn đều có sẵn labels.
+"""Gộp ảnh webcam đã chụp (captures/) vào tập train rồi tạo data_plus.yaml để train lại.
+Không copy ảnh, chỉ sinh một file .txt liệt kê ảnh train gốc + ảnh webcam mới và một
+file .yaml. Nhãn tự tìm theo quy ước YOLO (images/ -> labels/).
 
-Chạy:  python add_captures.py     (sau khi đã chụp bằng nút 📸 trên web)
+Chạy: python add_captures.py     (sau khi đã chụp mẫu trên web)
 """
 import os, glob
 from collections import Counter
@@ -14,7 +14,7 @@ train_imgs = glob.glob(os.path.join(ROOT, "train", "images", "*.jpg"))
 cap_imgs   = glob.glob(os.path.join(ROOT, "captures", "images", "*.jpg"))
 
 if not cap_imgs:
-    print("⚠️  Chưa có ảnh nào trong captures/images — hãy chụp bằng nút 📸 trên web trước đã.")
+    print("Chưa có ảnh nào trong captures/images — hãy chụp mẫu trên web trước.")
     raise SystemExit
 
 # đếm ảnh webcam theo người (tên file dạng <person>_<timestamp>.jpg)
@@ -47,5 +47,5 @@ for n in NAMES:
 print(f"Tổng train    : {len(all_imgs)}")
 print(f"-> {txt}")
 print(f"-> {yaml}")
-print("\nTrain lại (trong cmd RIÊNG, tắt Docker):")
-print('   sửa train.py:  data="data_plus.yaml"   rồi  python train.py')
+print("\nTrain lại:")
+print('   sửa train.py: data="data_plus.yaml" rồi chạy python train.py')

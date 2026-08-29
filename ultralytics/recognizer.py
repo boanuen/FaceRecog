@@ -14,7 +14,7 @@ DB_PATH   = os.path.join(BASE_DIR, "face_db.pt")
 # Cho phép ép chọn thiết bị OpenVINO cho YOLO qua biến môi trường: "GPU" (iGPU) hoặc "CPU".
 OV_YOLO_DEVICE = os.environ.get("OV_YOLO_DEVICE", "intel:gpu")
 
-MARGIN = 0.30   # nới quanh box YOLO trước khi đưa vào ArcFace 
+MARGIN = 0.30   # nới quanh box YOLO trước khi đưa vào ArcFace
 
 class FaceRecognizer:
     def __init__(self, yolo_path=YOLO_PATH, db_path=DB_PATH, device=None,
@@ -38,9 +38,8 @@ class FaceRecognizer:
         else:
             self.yolo = YOLO(yolo_path)
 
-        # ── ArcFace — căn chỉnh + embedding ──
-        # Tự chọn provider NHANH NHẤT sẵn có: CUDA > OpenVINO (Intel) > CPU.
-        # OpenVINO: tăng tốc 2-5× trên Intel mà GIỮ nguyên model & độ chính xác, KHÔNG enroll lại.
+        # ArcFace: căn chỉnh và embedding.
+        # Chọn provider nhanh nhất sẵn có: CUDA > OpenVINO (Intel) > CPU.
         if use_gpu_arcface and "CUDAExecutionProvider" in avail:
             providers, arc_ctx = ["CUDAExecutionProvider", "CPUExecutionProvider"], 0
         elif self.has_openvino:
@@ -52,8 +51,8 @@ class FaceRecognizer:
             self.arc = FaceAnalysis(name="buffalo_l", providers=providers,
                                     allowed_modules=["detection", "recognition"])
             self.arc.prepare(ctx_id=arc_ctx, det_size=arc_det_size)
-        except Exception as e:      # provider tối ưu lỗi → lùi về CPU cho chắc chạy được
-            print(f"[recognizer] ArcFace provider {providers} lỗi ({e}) → dùng CPU")
+        except Exception as e:      # provider tối ưu lỗi thì lùi về CPU
+            print(f"[recognizer] ArcFace provider {providers} lỗi ({e}) -> dùng CPU")
             self.arc_providers = ["CPUExecutionProvider"]
             self.arc = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"],
                                     allowed_modules=["detection", "recognition"])
@@ -70,7 +69,7 @@ class FaceRecognizer:
             self.load_db(db_path)
 
     def detect(self, img_bgr, imgsz=None):
-        """Trả list (x1,y1,x2,y2,conf) của MỌI mặt."""
+        """Trả list (x1,y1,x2,y2,conf) của mọi mặt."""
         if self.yolo_device is not None:            # YOLO OpenVINO (Intel): CPU/iGPU
             dev = self.yolo_device
         else:
@@ -87,10 +86,9 @@ class FaceRecognizer:
         return out
 
     def is_blurry(self, img_bgr, box, thr=60.0):
-        """True nếu vùng mặt MỜ (phương sai Laplacian < thr) — dùng để BỎ QUA hẳn ArcFace
-        trên khung nhoè do di chuyển: ảnh mờ vẫn ra được embedding nhưng kém tin cậy, dễ
-        NHẬN NHẦM người quen này thành người quen khác. Resize chuẩn 100x100 trước khi đo
-        để ngưỡng không phụ thuộc mặt gần/xa camera."""
+        """True nếu vùng mặt mờ (phương sai Laplacian < thr). Dùng để bỏ qua ArcFace trên
+        khung nhoè do di chuyển vì ảnh mờ cho embedding kém tin cậy. Resize 100x100 trước
+        khi đo để ngưỡng không phụ thuộc mặt gần/xa camera."""
         H, W = img_bgr.shape[:2]
         x1, y1, x2, y2 = box[:4]
         x1, y1 = max(0, int(x1)), max(0, int(y1))
@@ -102,7 +100,7 @@ class FaceRecognizer:
         return float(cv2.Laplacian(gray, cv2.CV_64F).var()) < thr
 
     def _embed_crop(self, img_bgr, box):
-        """Cắt vùng box (có margin) → ArcFace tự căn 5 landmark + embedding. Trả vec[512]"""
+        """Cắt vùng box (có margin), ArcFace tự căn 5 landmark rồi embedding. Trả vec[512]."""
         H, W = img_bgr.shape[:2]
         x1, y1, x2, y2 = box[:4]
         bw, bh = x2 - x1, y2 - y1
@@ -115,12 +113,12 @@ class FaceRecognizer:
         faces = self.arc.get(crop)
         if not faces:
             return None
-        # crop chỉ nên có 1 mặt; nếu nhiều, lấy mặt to nhất
+        # crop chỉ nên có 1 mặt, nếu nhiều thì lấy mặt to nhất
         f = max(faces, key=lambda x: (x.bbox[2] - x.bbox[0]) * (x.bbox[3] - x.bbox[1]))
         return torch.tensor(f.normed_embedding, dtype=torch.float32)
 
     def embed(self, img_bgr, boxes):
-        """boxes → (emb [K,512] normalized, keep: box embed thành công)."""
+        """boxes -> (emb [K,512] đã normalize, keep: index các box embed thành công)."""
         vecs, keep = [], []
         for i, b in enumerate(boxes):
             v = self._embed_crop(img_bgr, b)
@@ -150,8 +148,7 @@ class FaceRecognizer:
         torch.save({"names": self.db_names, "embs": embs, "roles": self.db_roles}, db_path)
 
     def add_embedding(self, name, vec, role: str = "kỹ sư"):
-        """Thêm 1 embedding (đã normalize) cho 'name' vào DB in-memory.
-        Nếu 'name' chưa có → tạo NGƯỜI MỚI (không cần train)."""
+        """Thêm một embedding (đã normalize) cho 'name'. Nếu chưa có thì tạo người mới."""
         if name not in self.db_names:
             self.db_names.append(name)
             self.db_roles[name] = role
@@ -164,7 +161,7 @@ class FaceRecognizer:
             self.db_owner = torch.cat([self.db_owner, torch.tensor([idx])])
 
     def remove_person(self, name):
-        """Xoá TOÀN BỘ embedding của 'name' khỏi DB (không cần train). True nếu có xoá."""
+        """Xoá toàn bộ embedding của 'name'. True nếu có xoá."""
         if name not in self.db_names or self.db_owner is None:
             return False
         idx = self.db_names.index(name)
@@ -179,9 +176,8 @@ class FaceRecognizer:
         return True
 
     def remove_embedding(self, name, local_index):
-        """Xoá 1 MẪU cụ thể (embedding thứ local_index, 0-based, theo thứ tự lưu) của 'name'.
-        Dùng khi enroll NHẦM 1 ảnh (vd ảnh son gắn nhầm tên tri) — không mất các mẫu đúng còn lại.
-        True nếu xoá được. Hết mẫu → xoá luôn người (như remove_person)."""
+        """Xoá một mẫu cụ thể (embedding thứ local_index, 0-based) của 'name'. Dùng khi
+        enroll nhầm một ảnh. True nếu xoá được. Hết mẫu thì xoá luôn người."""
         if name not in self.db_names or self.db_embs is None:
             return False
         idx = self.db_names.index(name)
@@ -196,12 +192,11 @@ class FaceRecognizer:
         return True
 
     def sample_diagnostics(self, name):
-        """Với mỗi mẫu của 'name': điểm TỰ-KHỚP (cosine với các mẫu CÒN LẠI của chính người đó,
-        bỏ qua chính nó) + người GIỐNG NHẤT trong số người KHÁC + điểm đó. Mẫu enroll NHẦM
-        (ảnh người khác gắn nhầm tên) thường tự-khớp THẤP và khớp cao bất thường với đúng
-        người bị chụp nhầm — nhìn vào đây là lộ ra ngay không cần xem lại ảnh (DB không lưu ảnh).
-        Trả list {index, self_sim, closest_other, closest_score}, sắp tự-khớp TĂNG DẦN (nghi ngờ
-        nhất lên đầu). index dùng trực tiếp cho remove_embedding()."""
+        """Với mỗi mẫu của 'name': điểm tự-khớp (cosine trung bình với các mẫu còn lại của
+        chính người đó) và người giống nhất trong số người khác cùng điểm. Mẫu enroll nhầm
+        thường tự-khớp thấp và khớp cao bất thường với người bị chụp nhầm. Trả list
+        {index, self_sim, closest_other, closest_score}, sắp theo self_sim tăng dần.
+        index dùng trực tiếp cho remove_embedding()."""
         if name not in self.db_names or self.db_embs is None:
             return []
         idx = self.db_names.index(name)
@@ -219,7 +214,7 @@ class FaceRecognizer:
                 rest = torch.cat([own[:local_i], own[local_i + 1:]], 0)
                 self_sim = float((rest @ own[local_i]).mean())
             else:
-                self_sim = 1.0   # mẫu duy nhất, không có gì để so
+                self_sim = 1.0   # mẫu duy nhất, không có gì để so sánh
             closest_other, closest_score = None, None
             if other_embs.shape[0] > 0:
                 sims = other_embs @ own[local_i]
@@ -231,16 +226,16 @@ class FaceRecognizer:
         return out
 
     def people_summary(self):
-        """List {name, role, count} theo db_names — để web hiện danh sách người + số mẫu."""
+        """List {name, role, count} theo db_names, để web hiện danh sách người và số mẫu."""
         return [{"name": n,
                  "role": self.db_roles.get(n, "kỹ sư"),
                  "count": 0 if self.db_owner is None else int((self.db_owner == i).sum())}
                 for i, n in enumerate(self.db_names)]
 
     def _rank(self, vec, topk=5):
-        """vec[512] → list (name, score) MỌI người, sắp giảm dần theo score.
-        Điểm mỗi người = TRUNG BÌNH top-k cosine với embedding của họ. Dùng top-k thay vì
-        max để 1 embedding lạc không đủ lật kết quả → giảm nhầm tui↔nghia."""
+        """vec[512] -> list (name, score) mọi người, sắp giảm dần theo score. Điểm mỗi
+        người = trung bình top-k cosine với embedding của họ, để một embedding lạc không
+        đủ lật kết quả."""
         if self.db_embs is None:
             return []
         sims = self.db_embs @ vec
@@ -253,7 +248,7 @@ class FaceRecognizer:
         return ranked
 
     def _match(self, vec, threshold):
-        """vec[512] → (name|None, score). => k đủ gần -> ng lạ."""
+        """vec[512] -> (name|None, score). Không đủ gần thì trả None (người lạ)."""
         ranked = self._rank(vec)
         if not ranked:
             return None, 0.0
@@ -261,8 +256,8 @@ class FaceRecognizer:
         return (name, score) if score >= threshold else (None, score)
 
     def recognize(self, img_bgr, threshold=0.28):
-        """Trả list {box, det_conf, name|None, best_name, score, runner, stranger} cho mỗi mặt.
-        runner = người đứng nhì {name, score} để thấy khoảng cách (độ tự tin)."""
+        """Trả list {box, det_conf, name|None, best_name, score, runner, stranger} cho mỗi
+        mặt. runner = người đứng nhì {name, score} để thấy khoảng cách điểm."""
         boxes = self.detect(img_bgr)
         if not boxes:
             return []
@@ -282,7 +277,7 @@ class FaceRecognizer:
         return out
 
     def embed_largest(self, img_bgr):
-        """Detect → embed mặt LỚN NHẤT (enroll từ webcam). Trả vec[512] | None."""
+        """Detect rồi embed mặt lớn nhất (dùng khi enroll từ webcam). Trả vec[512] hoặc None."""
         boxes = self.detect(img_bgr)
         if not boxes:
             return None

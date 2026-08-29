@@ -1,15 +1,15 @@
-"""Đo ĐỘ CHÍNH XÁC THẬT trên test set: nhận diện qua DB embedding vs nhãn gốc.
-Dùng GT box đo riêng phần NHẬN DIỆN"""
+"""Đo độ chính xác nhận diện trên test set: so kết quả match DB embedding với nhãn
+gốc. Dùng box nhãn gốc để đo riêng phần nhận diện, không lẫn sai số của detector."""
 import os, glob, warnings
 warnings.filterwarnings("ignore")
 import cv2, torch
 from recognizer import FaceRecognizer, BASE_DIR
 
 NAMES=['nghia','quan','son','tri','tui']
-rec=FaceRecognizer()   # load DB đã tạo
+rec=FaceRecognizer()   # load face_db.pt
 def y2xy(cx,cy,bw,bh,W,H): return (int((cx-bw/2)*W),int((cy-bh/2)*H),int((cx+bw/2)*W),int((cy+bh/2)*H))
 
-# gom (true_id, embedding) trên test
+# gom (true_id, embedding) từ test set
 data=[]
 for lbl in glob.glob(os.path.join(BASE_DIR,"test","labels","*.txt")):
     with open(lbl) as f: line=f.readline().split()
@@ -37,7 +37,7 @@ for thr in [0.25,0.30,0.35,0.40,0.45]:
     print(f"thr={thr}:  đúng {correct}/{n} ({100*correct/n:.1f}%) | sai {wrong} | gọi nhầm-lạ {stranger}")
 
 # chi tiết ở ngưỡng 0.35
-print("\n── Ma trận nhầm ở thr=0.35 (hàng=thật, cột=đoán) ──")
+print("\nMa trận nhầm ở thr=0.35 (hàng = thật, cột = đoán)")
 thr=0.35
 conf={t:{c:0 for c in NAMES+['LẠ']} for t in NAMES}
 for cid,v in data:

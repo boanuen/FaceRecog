@@ -87,14 +87,16 @@ class FocalLoss(nn.Module):
 
 
 class FocalLossNone(nn.Module):
-    """Focal loss trả về TENSOR chưa reduce (bs, num_anchors, nc), khớp hợp đồng của self.bce trong v8DetectionLoss.
+    """Focal loss trả về tensor chưa reduce (bs, num_anchors, nc), khớp với self.bce trong
+    v8DetectionLoss.
 
-    Khác với FocalLoss (trả scalar, dùng cho RT-DETR), class này giữ nguyên shape để caller tự
-    `.sum() / target_scores_sum`. Dùng cho bài phân biệt danh tính khó (down-weight mẫu dễ qua gamma).
+    Khác FocalLoss (trả scalar, dùng cho RT-DETR), class này giữ nguyên shape để caller tự
+    `.sum() / target_scores_sum`. Dùng cho bài phân biệt danh tính khó, giảm trọng số mẫu
+    dễ qua gamma.
 
     Attributes:
-        gamma (float): Hệ số focusing; càng lớn càng tập trung vào mẫu khó. 0.0 -> BCE thuần.
-        alpha (float): Cân bằng pos/neg. 0.0 = tắt (khuyên dùng khi các lớp cân bằng).
+        gamma (float): hệ số focusing, càng lớn càng tập trung vào mẫu khó. 0.0 -> BCE thuần.
+        alpha (float): cân bằng pos/neg. 0.0 = tắt (dùng khi các lớp cân bằng).
     """
 
     def __init__(self, gamma: float = 1.5, alpha: float = 0.0):
@@ -113,7 +115,7 @@ class FocalLossNone(nn.Module):
         if self.alpha > 0:
             alpha_factor = label * self.alpha + (1 - label) * (1 - self.alpha)
             loss = loss * alpha_factor
-        return loss  # (bs, num_anchors, nc) — KHÔNG reduce
+        return loss  # (bs, num_anchors, nc), không reduce
 
 
 class DFLoss(nn.Module):
@@ -376,8 +378,8 @@ class v8DetectionLoss:
 
         m = model.model[-1]  # Detect() module
         # self.bce = nn.BCEWithLogitsLoss(reduction="none")
-        # Focal elementwise (reduction="none") để tập trung vào mẫu khó (mặt quan/tri nghiêng)
-        # gamma>0: giảm trọng số mẫu dễ; alpha=0 để không lệch pos/neg (5 class cân bằng).
+        # Dùng focal loss elementwise để tập trung vào mẫu khó (mặt quan/tri nghiêng).
+        # gamma > 0 giảm trọng số mẫu dễ; alpha = 0 vì 5 lớp đã cân bằng.
         self.bce = FocalLossNone(gamma=1.5, alpha=0.0)
         self.hyp = h
         self.stride = m.stride  # model strides

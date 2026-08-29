@@ -1,7 +1,7 @@
 """
-THÍ NGHIỆM: train yolo26s trên dataset ĐÃ LỌC (bỏ ảnh quan/tri mặt <10%).
-Chạy SAU khi run gốc (train.py) xong — GPU 8GB chỉ chạy 1 train tại một thời điểm.
-Khác train.py đúng 2 chỗ:  data="data_filtered.yaml"  và  name="...v6_filtered".
+Thử nghiệm: train yolo26s trên dataset đã lọc (bỏ ảnh quan/tri có mặt < 10% khung).
+Chạy sau khi train.py xong vì GPU 8GB chỉ chạy được 1 train một lúc.
+Khác train.py đúng 2 chỗ: data="data_filtered.yaml" và name="...v6_filtered".
 """
 from ultralytics import YOLO
 import torch, sys
@@ -9,7 +9,7 @@ import torch, sys
 MODEL_SIZE = "s"
 IMGSZ = 512
 
-# Cấu hình y hệt train.py (config "s"), chỉ đổi name để KHÔNG đè run cũ.
+# Cấu hình y hệt config "s" của train.py, chỉ đổi name để không đè run cũ.
 _COMMON = dict(
     optimizer="MuSGD",
     lr0=0.002, lrf=0.01,
@@ -25,7 +25,7 @@ _COMMON = dict(
 cfg = dict(model="yolo26s.pt", name="yolo26s_face_v6_filtered", batch=8, **_COMMON)
 
 if __name__ == '__main__':
-    print(f"YOLO26{MODEL_SIZE.upper()} Face — THÍ NGHIỆM (dataset đã lọc)")
+    print(f"YOLO26{MODEL_SIZE.upper()} Face - thử nghiệm (dataset đã lọc)")
     if not torch.cuda.is_available():
         print("Không có GPU!")
         sys.exit(1)
@@ -38,7 +38,7 @@ if __name__ == '__main__':
     model = YOLO(cfg["model"])
 
     results = model.train(
-        data="data_filtered.yaml",     # ← KHÁC train.py
+        data="data_filtered.yaml",     # khác train.py
         epochs=110,
         patience=50,
         imgsz=IMGSZ,
@@ -67,7 +67,7 @@ if __name__ == '__main__':
         workers=2,
 
         project="runs/face_yolo26",
-        name=cfg["name"],              # ← v6_filtered, không đè run cũ
+        name=cfg["name"],              # v6_filtered, không đè run cũ
         save_period=10,
         plots=True,
         verbose=True,
@@ -75,7 +75,7 @@ if __name__ == '__main__':
 
     rd = results.results_dict
     print("\n" + "=" * 60)
-    print("xong (thí nghiệm filtered)!")
+    print("Xong (thử nghiệm dataset đã lọc).")
     print(f"   Best model : {results.save_dir}/weights/best.pt")
     print(f"   mAP50      : {rd.get('metrics/mAP50(B)', 0):.4f}")
     print(f"   Precision  : {rd.get('metrics/precision(B)', 0):.4f}")
@@ -87,4 +87,4 @@ if __name__ == '__main__':
         if ap is not None:
             print(f"     {cls_name}: {ap:.4f}")
 
-    print("\n   -> So confusion_matrix_normalized.png của run này với run cũ (ô quan<->tri).")
+    print("\n   -> So confusion_matrix_normalized.png của run này với run cũ (ô quan / tri).")
